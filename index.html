@@ -36,7 +36,7 @@
                 <div>
                     <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
                         WA RadioBot Studio
-                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.1 Anti-Race Fix</span>
+                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.3 GitHub MP3 + Anti-Drop</span>
                     </h1>
                     <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
                 </div>
@@ -75,33 +75,32 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-red-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Log Fix #1: Double `/pair` Race</div>
+                    <div class="bg-slate-950/90 border border-emerald-500/40 p-4 rounded-xl">
+                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-brands fa-github mr-1"></i> New v2.3: GitHub `.mp3` & Repo Sync</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            Your logs showed <code>Switching to 8-Digit Pairing Mode</code> firing twice in 0.8s (`16:42:25` & `16:42:26`). The second hit wiped the encryption keys for <code>X1SF-KFBS</code>! v2.1 adds a 15-second cooldown lock and separates tab-switching (`/mode`) from code generation (`POST /pair`).
+                            Send <code>!add https://github.com/.../song.mp3</code> for single tracks, or <code>!repo https://github.com/BUSA2023/Wabot</code> (or <code>!sync</code>) to load all <code>.mp3</code> files from a GitHub repo live!
+                        </p>
+                    </div>
+                    <div class="bg-slate-950/90 border border-amber-500/40 p-4 rounded-xl">
+                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-shield-heart mr-1"></i> Why Connection Dropped & Urgent Fix</div>
+                        <p class="text-xs text-slate-300 leading-relaxed">
+                            1) Render sleeps after 15m unless pinged <strong>externally</strong> (use Cron-Job.org on <code>/ping</code>).<br>
+                            2) Pushing MP3s to the <em>same</em> GitHub repo triggers a Render redeploy which wipes your login! Disable "Auto-Deploy" on Render or keep MP3s in a separate repo.
                         </p>
                     </div>
                     <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Log Fix #2: Node 26 vs Node 20 LTS</div>
+                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-heart-pulse mr-1"></i> 20s Socket Heartbeat Added</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            Render installed experimental <code>Node.js 26.12.1</code> because <code>package.json</code> had <code>>=20.0.0</code>. We pinned <code>"node": "20.x"</code> in <code>package.json</code> so Render uses stable LTS Node 20.
-                        </p>
-                    </div>
-                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-check-double mr-1"></i> Log Fix #3: Socket Instance Lock</div>
-                        <p class="text-xs text-slate-300 leading-relaxed">
-                            Each socket now gets a unique <code>currentSocketId</code> and removed the deprecated <code>printQRInTerminal</code> flag so closing an old socket never interferes with your new pairing code.
+                            Added a 20-second Baileys WebSocket ping + 45-second active presence heartbeat and automatic session recovery on codes <code>408/516</code> so temporary network drops reconnect in 2.5s without losing your session.
                         </p>
                     </div>
                 </div>
 
                 <div class="mt-6 bg-slate-950 border border-slate-800 rounded-xl p-5">
-                    <h3 class="font-bold text-sm text-emerald-400 mb-3">🚀 How to Connect Right Now (After Updating `package.json` & `bot.js` on GitHub/Render):</h3>
+                    <h3 class="font-bold text-sm text-emerald-400 mb-3">🛡️ 2 Mandatory Steps So Your Connection NEVER Drops Again:</h3>
                     <ol class="text-xs text-slate-300 space-y-2.5 list-decimal list-inside">
-                        <li>Replace both <strong>package.json</strong> and <strong>bot.js</strong> in your GitHub repository with the updated files generated on the right.</li>
-                        <li>Wait 1–2 minutes for Render to finish deploying your update, then open your live Render URL.</li>
-                        <li><strong>For Method 1 (QR Scan - Recommended):</strong> Stay on the default <strong>Method 1: Scan QR Code</strong> tab. The QR code updates live on screen—scan it from <strong>+91 9656977828</strong>.</li>
-                        <li><strong>For Method 2 (8-Digit Code):</strong> Click <strong>Method 2: 8-Digit Pairing Code</strong>, verify <code>919656977828</code> is in the box, click <strong>Get Fresh 8-Digit Code</strong>, and enter it on your phone. Wait 5 seconds for the automatic 515 handshake to complete!</li>
+                        <li><strong>Add External Ping (Takes 1 Min):</strong> Go to <a href="https://cron-job.org" target="_blank" class="text-emerald-400 underline">cron-job.org</a> (free), create a cronjob for <code>https://wabot-4nbu.onrender.com/ping</code> set to <strong>Every 5 minutes</strong>. This prevents Render from putting your bot to sleep and wiping the disk.</li>
+                        <li><strong>Prevent GitHub Song Uploads From Restarting Render:</strong> In your Render Dashboard &rarr; <strong>Settings</strong> &rarr; <strong>Build & Deploy</strong> &rarr; set <strong>Auto-Deploy</strong> to <code>No</code> (after deploying this v2.3 `bot.js`). Now you can upload `.mp3` songs to GitHub anytime and type <code>!sync</code> or <code>!repo &lt;github-link&gt;</code> in WhatsApp without Render restarting and disconnecting your bot!</li>
                     </ol>
                 </div>
             </div>
@@ -135,11 +134,12 @@
                         <p class="font-semibold text-emerald-400 text-xs mb-1">RadioBot (+91 9656977828)</p>
                         <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Message me from your personal WhatsApp to edit the group's playlist privately:</p>
                         <ul class="text-[11px] font-mono text-slate-300 mt-2 space-y-1 bg-slate-900/70 p-2 rounded-lg">
-                            <li><span class="text-emerald-400">!add</span> [Song Name]</li>
+                            <li><span class="text-emerald-400">!add</span> [Song Name or .mp3 URL]</li>
+                            <li><span class="text-emerald-400">!sync</span> / <span class="text-emerald-400">!repo</span> (Load GitHub MP3s)</li>
                             <li><span class="text-emerald-400">!list</span> (View current queue)</li>
-                            <li><span class="text-emerald-400">!remove</span> [Number]</li>
-                            <li><span class="text-emerald-400">!top</span> [Number] (Move song to #1)</li>
-                            <li><span class="text-emerald-400">!autodj</span> (Toggle 24/7 non-stop radio)</li>
+                            <li><span class="text-emerald-400">!skip</span> or <span class="text-emerald-400">!next</span> (Skip playing song)</li>
+                            <li><span class="text-emerald-400">!stop</span> (Stop & delete playing song)</li>
+                            <li><span class="text-emerald-400">!remove</span> [Number] / <span class="text-emerald-400">!top</span> [Number]</li>
                             <li><span class="text-emerald-400">!play</span> (Send HQ track to Group)</li>
                         </ul>
                     </div>
@@ -148,9 +148,10 @@
                 <!-- Quick Command Chips -->
                 <div class="bg-[#182229] px-3 py-2 flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 text-xs">
                     <button onclick="sendQuickCmd('!list')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-full whitespace-nowrap border border-slate-700">!list</button>
+                    <button onclick="sendQuickCmd('!skip')" class="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full whitespace-nowrap border border-amber-500/30">⏭️ !skip</button>
+                    <button onclick="sendQuickCmd('!stop')" class="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full whitespace-nowrap border border-red-500/30">⏹️ !stop</button>
                     <button onclick="sendQuickCmd('!add Blinding Lights - The Weeknd')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Blinding Lights</button>
-                    <button onclick="sendQuickCmd('!add Levitating - Dua Lipa')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Levitating</button>
-                    <button onclick="sendQuickCmd('!play')" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 rounded-full whitespace-nowrap border border-emerald-500/30">▶ !play next</button>
+                    <button onclick="sendQuickCmd('!play')" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 rounded-full whitespace-nowrap border border-emerald-500/30">▶ !play</button>
                 </div>
 
                 <!-- Input Bar -->
@@ -193,8 +194,8 @@
                                     <i class="fa-solid fa-play" id="radio-play-icon"></i>
                                     <span id="radio-play-text">Test HQ Radio Synth Stream</span>
                                 </button>
-                                <button onclick="playNextInQueue()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs flex items-center gap-1.5 border border-slate-700 transition">
-                                    <i class="fa-solid fa-forward-step"></i> Skip to Next Song
+                                <button onclick="sendQuickCmd('!skip')" class="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs flex items-center gap-1.5 border border-amber-500/30 transition">
+                                    <i class="fa-solid fa-forward-step"></i> !skip Song
                                 </button>
                                 <!-- Equalizer Bars -->
                                 <div id="eq-container" class="hidden items-end gap-1 h-6 px-2">
@@ -371,6 +372,23 @@
                     songQueue.unshift(item);
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `⬆️ Moved *${item.title}* to #1 in the queue!`);
+                }
+                else if (lower === '!skip' || lower === '!next') {
+                    const currentTitle = document.getElementById('now-playing-title').textContent;
+                    if (songQueue.length === 0) {
+                        document.getElementById('now-playing-title').textContent = "Nothing Playing (Queue Empty)";
+                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ Skipped *${currentTitle}* and deleted the audio message from chat!\n📭 Queue is now empty.`);
+                    } else {
+                        const next = songQueue.shift();
+                        renderQueue();
+                        document.getElementById('now-playing-title').textContent = next.title;
+                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ *Skipped ${currentTitle}!* (Removed previous audio player from chat)\n🎧 *Now Broadcasting:* 🎵 ${next.title}`);
+                    }
+                }
+                else if (lower === '!stop') {
+                    const currentTitle = document.getElementById('now-playing-title').textContent;
+                    document.getElementById('now-playing-title').textContent = "Stopped";
+                    appendChatMessage("RadioBot (+91 9656977828)", `⏹️ Stopped *${currentTitle}* and removed the audio player from the group chat.`);
                 }
                 else if (lower === '!play' || lower === '!playnext') {
                     playNextInQueue();
