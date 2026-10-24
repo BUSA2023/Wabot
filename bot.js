@@ -26,6 +26,7 @@ const ytdl = require('@distube/ytdl-core');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const http = require('http');
 
 // ============================================================================
 // CONFIGURATION
@@ -42,6 +43,9 @@ const DEFAULT_BOT_NUMBER = (process.env.BOT_NUMBER || '919656977828').replace(/[
 // Your Live Render URL for automatic 24/7 self-pinging
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4nbu.onrender.com';
 
+// Default GitHub Repo for syncing .mp3 files live without redeploying
+const DEFAULT_GITHUB_REPO = process.env.GITHUB_REPO || 'https://github.com/BUSA2023/Wabot';
+
 const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
 
 // In-Memory State
@@ -50,6 +54,10 @@ let targetGroupJid = null;
 let nowPlaying = null;
 let autoDjEnabled = true;
 let autoDjTimer = null;
+let wsKeepAliveInterval = null;
+let lastPlayedAudioKey = null;
+let lastPlayedJid = null;
+let currentDownloadAbort = null;
 
 // Connection & Anti-Race Lock State
 let activeSock = null;
@@ -350,12 +358,116 @@ app.listen(PORT, '0.0.0.0', () => {
             https.get(`${RENDER_EXTERNAL_URL.replace(/\/+$/, '')}/ping`, (res) => {
                 console.log(`⚡ 24/7 Self-Ping Status: ${res.statusCode}`);
             }).on('error', () => {});
-        }, 10 * 60 * 1000);
+        }, 4 * 60 * 1000); // Every 4 minutes
     }
 });
 
 // ============================================================================
-// 2. WHATSAPP BOT CORE LOGIC (LOCKED SOCKET INSTANCE & HANDSHAKE)
+// GITHUB & DIRECT MP3 DOWNLOAD HELPERS
+// ============================================================================
+
+// Convert standard GitHub blob URL to raw.githubusercontent.com URL
+function normalizeGitHubMp3Url(rawUrl) {
+    let url = rawUrl.trim();
+    // Convert https://github.com/user/repo/blob/branch/path.mp3 -> https://raw.githubusercontent.com/user/repo/branch/path.mp3
+    if (url.includes('github.com') && url.includes('/blob/')) {
+        url = url
+            .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+            .replace('/blob/', '/');
+    }
+    return url;
+}
+
+// Download any direct .mp3 URL (including GitHub Raw) with redirect support
+function downloadDirectMp3(fileUrl, destPath) {
+    return new Promise((resolve, reject) => {
+        const client = fileUrl.startsWith('https') ? https : http;
+        const req = client.get(fileUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (WA-RadioBot/2.3)' }
+        }, (res) => {
+            // Follow 301/302 redirects (GitHub raw redirects)
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return downloadDirectMp3(res.headers.location, destPath).then(resolve).catch(reject);
+            }
+            if (res.statusCode !== 200) {
+                return reject(new Error(`HTTP Status ${res.statusCode}`));
+            }
+            const fileStream = fs.createWriteStream(destPath);
+            res.pipe(fileStream);
+            fileStream.on('finish', () => {
+                fileStream.close(() => resolve(destPath));
+            });
+            fileStream.on('error', (err) => {
+                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                reject(err);
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(45000, () => {
+            req.destroy();
+            reject(new Error('Download timeout'));
+        });
+    });
+}
+
+// Fetch all .mp3 files from a GitHub Repository or Folder URL using GitHub API
+function fetchGitHubRepoMp3s(repoUrl) {
+    return new Promise((resolve, reject) => {
+        try {
+            // Parse https://github.com/OWNER/REPO or https://github.com/OWNER/REPO/tree/BRANCH/FOLDER
+            const cleaned = repoUrl.trim().replace(/\/+$/, '');
+            const match = cleaned.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+)(?:\/(.*))?)?/i);
+            if (!match) {
+                return reject(new Error('Invalid GitHub repository URL. Example: https://github.com/BUSA2023/Wabot'));
+            }
+            const owner = match[1];
+            const repo = match[2].replace(/\.git$/i, '');
+            const branch = match[3] || '';
+            const subPath = match[4] || '';
+
+            const apiPath = `/repos/${owner}/${repo}/contents/${subPath}${branch ? `?ref=${branch}` : ''}`;
+
+            https.get({
+                hostname: 'api.github.com',
+                path: apiPath,
+                headers: {
+                    'User-Agent': 'WA-RadioBot-v2.3',
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            }, (res) => {
+                let rawData = '';
+                res.on('data', chunk => rawData += chunk);
+                res.on('end', () => {
+                    try {
+                        if (res.statusCode !== 200) {
+                            return reject(new Error(`GitHub API returned status ${res.statusCode}`));
+                        }
+                        const items = JSON.parse(rawData);
+                        const list = Array.isArray(items) ? items : [items];
+                        const mp3Files = list
+                            .filter(item => item.type === 'file' && /\.(mp3|m4a|ogg|wav)$/i.test(item.name) && item.download_url)
+                            .map(item => ({
+                                title: decodeURIComponent(item.name.replace(/\.(mp3|m4a|ogg|wav)$/i, '').replace(/[-_]/g, ' ')),
+                                url: item.download_url,
+                                duration: 'HQ Direct MP3',
+                                thumbnail: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
+                                author: `${owner}/${repo}`,
+                                isDirectMp3: true
+                            }));
+                        resolve(mp3Files);
+                    } catch (parseErr) {
+                        reject(parseErr);
+                    }
+                });
+            }).on('error', reject);
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+// ============================================================================
+// 2. WHATSAPP BOT CORE LOGIC (LOCKED SOCKET INSTANCE & ANTI-DROP HEARTBEAT)
 // ============================================================================
 const logger = pino({ level: 'silent' });
 
@@ -368,6 +480,10 @@ async function startRadioBot(forceRestart = false) {
 
     try {
         // Cleanly close existing socket if restarting
+        if (wsKeepAliveInterval) {
+            clearInterval(wsKeepAliveInterval);
+            wsKeepAliveInterval = null;
+        }
         if (activeSock) {
             try {
                 activeSock.ev.removeAllListeners();
@@ -379,6 +495,10 @@ async function startRadioBot(forceRestart = false) {
         if (!fs.existsSync(AUTH_DIR)) {
             fs.mkdirSync(AUTH_DIR, { recursive: true });
         }
+
+        // Check if local folder has saved credentials so startup defaults to existing session
+        const credsFile = path.join(AUTH_DIR, 'creds.json');
+        const hasExistingSession = fs.existsSync(credsFile);
 
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
@@ -405,7 +525,10 @@ async function startRadioBot(forceRestart = false) {
             generateHighQualityLinkPreview: false,
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
+            // CRITICAL FIX FOR CONNECTION DROPS: Send WebSocket ping every 20s & retry fast
             keepAliveIntervalMs: 20000,
+            retryRequestDelayMs: 1500,
+            maxMsgRetryCount: 5,
             // Required by WhatsApp Business Multi-Device to decrypt incoming DM commands reliably
             getMessage: async () => ({ conversation: 'WA RadioBot' })
         });
@@ -453,6 +576,10 @@ async function startRadioBot(forceRestart = false) {
             // 2. Handle Connection Close & Handshake Restart (515)
             if (connection === 'close') {
                 if (mySocketId !== currentSocketId) return;
+                if (wsKeepAliveInterval) {
+                    clearInterval(wsKeepAliveInterval);
+                    wsKeepAliveInterval = null;
+                }
                 isConnected = false;
                 isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -460,22 +587,28 @@ async function startRadioBot(forceRestart = false) {
                 console.log(`⚠️ Connection closed. Status: ${statusCode} (${reason})`);
 
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                    // ONLY wipe auth folder when explicitly logged out (401)
-                    console.log('🧹 Device logged out (401). Wiping auth folder for fresh login...');
+                    // ONLY wipe auth folder when explicitly logged out from phone (401)
+                    console.log('🧹 Device logged out from phone (401). Wiping auth folder for fresh login...');
                     clearAuthFolder();
                     latestPairingCode = null;
                     latestQrDataUrl = null;
                     botConnectionStatus = 'Logged out. Ready for fresh pairing...';
                     setTimeout(() => startRadioBot(false), 3000);
                 } else if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
-                    // CRITICAL FIX: Status 515 happens right after you scan QR or enter the 8-digit code!
+                    // Status 515 happens right after you scan QR or enter the 8-digit code
                     console.log('🔄 Pairing handshake succeeded (515)! Reconnecting immediately to finalize login...');
                     botConnectionStatus = 'Handshake complete! Finalizing WhatsApp login...';
                     setTimeout(() => startRadioBot(false), 1000);
+                } else if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
+                    // Another instance started (e.g., during Render rolling deploy) - wait 8s before reconnecting
+                    console.log('⏳ Connection replaced by newer deploy instance (440). Waiting 8s...');
+                    botConnectionStatus = 'Syncing with new deploy instance...';
+                    setTimeout(() => startRadioBot(false), 8000);
                 } else {
-                    // Preserve existing auth state so active pairing codes stay valid
-                    botConnectionStatus = `Reconnecting to WhatsApp (Code ${statusCode || 'timeout'})...`;
-                    setTimeout(() => startRadioBot(false), 4000);
+                    // Network hiccup, stream error (516), or timeout (408) -> Reconnect immediately WITHOUT deleting auth folder!
+                    console.log(`🔄 Auto-reconnecting preserved session (Status ${statusCode})...`);
+                    botConnectionStatus = `Auto-reconnecting session (Code ${statusCode || 'network'})...`;
+                    setTimeout(() => startRadioBot(false), 2500);
                 }
             }
 
@@ -488,18 +621,50 @@ async function startRadioBot(forceRestart = false) {
                 latestQrDataUrl = null;
                 botConnectionStatus = 'Connected & Streaming 24/7 ✅';
                 console.log(`✅ WhatsApp High-Quality Radio Bot (+${pairingPhoneNumber}) is Connected!`);
-                console.log(`📩 Send commands (!add, !list, !remove, !top, !play) from +${RAW_OWNER}`);
+                console.log(`📩 Send commands (!add, !repo, !sync, !list, !play) from +${RAW_OWNER}`);
+
+                // Start Active WebSocket Heartbeat every 45 seconds so NAT/Render never drops the idle socket
+                if (wsKeepAliveInterval) clearInterval(wsKeepAliveInterval);
+                wsKeepAliveInterval = setInterval(async () => {
+                    if (activeSock && isConnected) {
+                        try {
+                            await activeSock.sendPresenceUpdate('available');
+                        } catch (e) {}
+                    }
+                }, 45000);
             }
         });
 
-        // Helper function to broadcast the next song in High Quality Stereo MP3
-        async function broadcastNextSong(notifyJid) {
+        // Helper function to broadcast the next song in High Quality Stereo MP3 (Supports GitHub MP3 & YouTube)
+        async function broadcastNextSong(notifyJid, isSkip = false) {
+            // Cancel any pending Auto-DJ timer or in-flight download when skipping/playing
+            if (autoDjTimer) {
+                clearTimeout(autoDjTimer);
+                autoDjTimer = null;
+            }
+            if (currentDownloadAbort) {
+                try { currentDownloadAbort(); } catch (e) {}
+                currentDownloadAbort = null;
+            }
+
+            // If skipping, delete the previous audio message in WhatsApp so playback stops immediately
+            if (isSkip && lastPlayedAudioKey && lastPlayedJid) {
+                try {
+                    await sock.sendMessage(lastPlayedJid, { delete: lastPlayedAudioKey });
+                    lastPlayedAudioKey = null;
+                } catch (delErr) {
+                    console.log('Could not delete previous audio message on skip:', delErr.message);
+                }
+            }
+
             const destinationJid = targetGroupJid || notifyJid;
             if (requestQueue.length === 0) {
                 nowPlaying = null;
                 if (notifyJid) {
                     await sock.sendMessage(notifyJid, {
-                        text: '📭 Queue finished! Send `!add <song name>` from your personal DM to keep the radio going.'
+                        text: isSkip
+                            ? '⏭️ Skipped! 📭 The queue is now empty. Send `!add <song or .mp3 url>` or `!sync` to add more tracks.'
+                            : '📭 Queue finished! Send `!add <song or .mp3 url>` or `!sync` from your DM to keep the radio going.'
                     });
                 }
                 return;
@@ -510,13 +675,75 @@ async function startRadioBot(forceRestart = false) {
 
             if (notifyJid) {
                 await sock.sendMessage(notifyJid, {
-                    text: `🎧 Broadcasting *${nextSong.title}* in High-Quality Stereo MP3 to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
+                    text: `${isSkip ? '⏭️ *Skipped to Next Track!*\n' : ''}🎧 Broadcasting *${nextSong.title}* (${nextSong.isDirectMp3 ? 'GitHub Direct MP3' : 'HQ Stereo MP3'}) to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
                 });
             }
 
             const tempFilePath = path.join(__dirname, `temp_${Date.now()}.mp3`);
+            let isAborted = false;
+
+            currentDownloadAbort = () => {
+                isAborted = true;
+                if (fs.existsSync(tempFilePath)) {
+                    try { fs.unlinkSync(tempFilePath); } catch (e) {}
+                }
+            };
+
+            // Helper to send the downloaded tempFilePath to WhatsApp & schedule Auto-DJ
+            const sendAudioFileAndScheduleNext = async () => {
+                if (isAborted) return;
+                currentDownloadAbort = null;
+                try {
+                    if (!fs.existsSync(tempFilePath)) return;
+                    const sentMsg = await sock.sendMessage(destinationJid, {
+                        audio: fs.readFileSync(tempFilePath),
+                        mimetype: 'audio/mpeg',
+                        ptt: false, // Crystal Clear Stereo Music Player
+                        fileName: `${nextSong.title}.mp3`,
+                        contextInfo: {
+                            externalAdReply: {
+                                title: `📻 Now Playing: ${nextSong.title}`,
+                                body: `High-Quality Radio • Controlled by +${RAW_OWNER}`,
+                                mediaType: 2,
+                                thumbnailUrl: nextSong.thumbnail,
+                                sourceUrl: nextSong.url
+                            }
+                        }
+                    });
+                    if (sentMsg && sentMsg.key) {
+                        lastPlayedAudioKey = sentMsg.key;
+                        lastPlayedJid = destinationJid;
+                    }
+                } catch (sendErr) {
+                    console.error('Error sending audio message:', sendErr.message);
+                } finally {
+                    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                }
+
+                if (autoDjEnabled && requestQueue.length > 0 && !isAborted) {
+                    if (autoDjTimer) clearTimeout(autoDjTimer);
+                    const parts = (nextSong.duration || '3:30').split(':').map(Number);
+                    const seconds = parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])
+                        ? (parts[0] * 60 + parts[1])
+                        : 210;
+                    const delayMs = Math.min(Math.max(seconds * 1000, 30000), 8 * 60 * 1000);
+                    autoDjTimer = setTimeout(() => {
+                        if (autoDjEnabled && requestQueue.length > 0) {
+                            broadcastNextSong(OWNER_NUMBER, false);
+                        }
+                    }, delayMs);
+                }
+            };
 
             try {
+                // CASE 1: Direct .mp3 link or GitHub Raw file
+                if (nextSong.isDirectMp3) {
+                    await downloadDirectMp3(nextSong.url, tempFilePath);
+                    await sendAudioFileAndScheduleNext();
+                    return;
+                }
+
+                // CASE 2: YouTube Stream
                 const audioStream = ytdl(nextSong.url, {
                     filter: 'audioonly',
                     quality: 'highestaudio',
@@ -525,60 +752,40 @@ async function startRadioBot(forceRestart = false) {
 
                 const writeStream = fs.createWriteStream(tempFilePath);
 
+                currentDownloadAbort = () => {
+                    isAborted = true;
+                    try { audioStream.destroy(); } catch (e) {}
+                    try { writeStream.destroy(); } catch (e) {}
+                    if (fs.existsSync(tempFilePath)) {
+                        try { fs.unlinkSync(tempFilePath); } catch (e) {}
+                    }
+                };
+
                 audioStream.on('error', async (err) => {
+                    if (isAborted) return;
                     console.error('Audio download error:', err.message);
                     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                     if (notifyJid) {
                         await sock.sendMessage(notifyJid, {
-                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Skipping to next song...`
+                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Tip: Use GitHub .mp3 links (\`!add https://...song.mp3\` or \`!repo\`) for 100% reliability!`
                         });
                     }
                     if (requestQueue.length > 0) {
-                        setTimeout(() => broadcastNextSong(notifyJid), 2000);
+                        setTimeout(() => broadcastNextSong(notifyJid, false), 2000);
                     }
                 });
 
-                writeStream.on('finish', async () => {
-                    try {
-                        if (!fs.existsSync(tempFilePath)) return;
-                        await sock.sendMessage(destinationJid, {
-                            audio: fs.readFileSync(tempFilePath),
-                            mimetype: 'audio/mpeg',
-                            ptt: false, // Crystal Clear Stereo Music Player
-                            fileName: `${nextSong.title}.mp3`,
-                            contextInfo: {
-                                externalAdReply: {
-                                    title: `📻 Now Playing: ${nextSong.title}`,
-                                    body: `High-Quality Radio • Controlled by +${RAW_OWNER}`,
-                                    mediaType: 2,
-                                    thumbnailUrl: nextSong.thumbnail,
-                                    sourceUrl: nextSong.url
-                                }
-                            }
-                        });
-                    } catch (sendErr) {
-                        console.error('Error sending audio message:', sendErr.message);
-                    } finally {
-                        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-                    }
-
-                    if (autoDjEnabled && requestQueue.length > 0) {
-                        if (autoDjTimer) clearTimeout(autoDjTimer);
-                        const parts = (nextSong.duration || '3:30').split(':').map(Number);
-                        const seconds = parts.length === 2 ? (parts[0] * 60 + parts[1]) : 210;
-                        const delayMs = Math.min(Math.max(seconds * 1000, 30000), 8 * 60 * 1000);
-                        autoDjTimer = setTimeout(() => {
-                            if (autoDjEnabled && requestQueue.length > 0) {
-                                broadcastNextSong(OWNER_NUMBER);
-                            }
-                        }, delayMs);
-                    }
-                });
-
+                writeStream.on('finish', sendAudioFileAndScheduleNext);
                 audioStream.pipe(writeStream);
             } catch (err) {
+                if (isAborted) return;
                 console.error('Broadcast setup error:', err.message);
                 if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                if (notifyJid) {
+                    await sock.sendMessage(notifyJid, {
+                        text: `⚠️ Failed to download *${nextSong.title}*: ${err.message}`
+                    });
+                }
             }
         }
 
@@ -644,17 +851,21 @@ async function startRadioBot(forceRestart = false) {
                     // 0. Quick Status / Alive Check (!alive, .alive, !ping, !help)
                     if (cmd === '!alive' || cmd === '!ping' || cmd === '!help') {
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *WA RadioBot v2.2 is ONLINE 24/7!* ✅\n\n` +
+                            text: `📻 *WA RadioBot v2.4 (Skip + GitHub MP3 + Anti-Drop) is ONLINE!* ✅\n\n` +
                                   `👑 *Controller:* +${RAW_OWNER}\n` +
                                   `🤖 *Bot Line:* +${pairingPhoneNumber}\n` +
+                                  `🎶 *Now Playing:* ${nowPlaying ? nowPlaying.title : 'Nothing playing'}\n` +
                                   `🎵 *Songs in Queue:* ${requestQueue.length}\n` +
                                   `📢 *Bound Group:* ${targetGroupJid ? 'Linked ✅' : 'Not bound yet (Send !bind in group)'}\n\n` +
                                   `*Commands (both ! and . work):*\n` +
-                                  `• \`!add <song name>\`\n` +
-                                  `• \`!list\`\n` +
-                                  `• \`!play\`\n` +
-                                  `• \`!top <number>\`\n` +
-                                  `• \`!remove <number>\`\n` +
+                                  `• \`!add <song name or .mp3 link>\`\n` +
+                                  `• \`!repo <github repo/folder url>\` (Loads all .mp3s!)\n` +
+                                  `• \`!sync\` (Syncs .mp3s from ${DEFAULT_GITHUB_REPO})\n` +
+                                  `• \`!play\` (Start playing queue)\n` +
+                                  `• \`!skip\` or \`!next\` (Stop current & play next song)\n` +
+                                  `• \`!stop\` (Stop current playback & clear timer)\n` +
+                                  `• \`!list\` (View queue)\n` +
+                                  `• \`!top <number>\` / \`!remove <number>\`\n` +
                                   `• \`!autodj\`\n` +
                                   `• \`!bind\` (send inside your WhatsApp group)`
                         }, { quoted: msg });
@@ -664,19 +875,88 @@ async function startRadioBot(forceRestart = false) {
                     if (cmd === '!bind' && isGroup) {
                         targetGroupJid = remoteJid;
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
+                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs & GitHub MP3s will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
                         }, { quoted: msg });
                         continue;
                     }
 
                     if (!isOwner) continue;
 
+                    // NEW: !repo or !sync -> Fetch all .mp3 files from a GitHub repo or folder URL
+                    if (cmd === '!repo' || cmd === '!sync' || cmd === '!github') {
+                        const targetRepoUrl = query || DEFAULT_GITHUB_REPO;
+                        await sock.sendMessage(remoteJid, {
+                            text: `🔄 Scanning GitHub repository for \`.mp3\` tracks:\n*${targetRepoUrl}*...`
+                        }, { quoted: msg });
+
+                        try {
+                            const mp3Tracks = await fetchGitHubRepoMp3s(targetRepoUrl);
+                            if (mp3Tracks.length === 0) {
+                                await sock.sendMessage(remoteJid, {
+                                    text: `📭 No \`.mp3\` files found in *${targetRepoUrl}*.\n\n*Tip:* Upload \`.mp3\` files to your GitHub repo (or a subfolder like \`https://github.com/BUSA2023/Wabot/tree/main/songs\`) and run \`!repo <url>\` again!`
+                                }, { quoted: msg });
+                                continue;
+                            }
+
+                            requestQueue.push(...mp3Tracks);
+                            const previewList = mp3Tracks.slice(0, 10).map((t, i) => `${i + 1}. 🎵 ${t.title}`).join('\n');
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Synced ${mp3Tracks.length} MP3 Song(s) from GitHub!*\n\n${previewList}${mp3Tracks.length > 10 ? `\n...and ${mp3Tracks.length - 10} more!` : ''}\n\n_Type !play to start broadcasting or !list to view the queue._`
+                            }, { quoted: msg });
+                        } catch (repoErr) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `❌ Could not load GitHub repo: ${repoErr.message}`
+                            }, { quoted: msg });
+                        }
+                        continue;
+                    }
+
                     if (cmd === '!add') {
                         if (!query) {
-                            await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>` (Example: `!add Blinding Lights`)' }, { quoted: msg });
+                            await sock.sendMessage(remoteJid, {
+                                text: '⚠️ Usage:\n• `!add https://github.com/.../song.mp3` (Direct MP3)\n• `!add https://github.com/user/repo` (All Repo MP3s)\n• `!add Blinding Lights` (YouTube Search)'
+                            }, { quoted: msg });
                             continue;
                         }
 
+                        // 1. Check if the user passed a GitHub Repository/Folder link to !add
+                        if (/^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+(\/tree\/.*)?$/i.test(query.trim()) && !/\.(mp3|m4a|ogg|wav)(\?.*)?$/i.test(query.trim())) {
+                            await sock.sendMessage(remoteJid, { text: `🔄 Scanning GitHub repository for MP3 files: *${query}*...` }, { quoted: msg });
+                            const mp3Tracks = await fetchGitHubRepoMp3s(query.trim());
+                            if (mp3Tracks.length === 0) {
+                                await sock.sendMessage(remoteJid, { text: '📭 No `.mp3` files found in that GitHub repository folder.' }, { quoted: msg });
+                                continue;
+                            }
+                            requestQueue.push(...mp3Tracks);
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Added ${mp3Tracks.length} MP3 track(s) from GitHub Repo!*\nType \`!list\` to inspect or \`!play\` to broadcast.`
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        // 2. Check if the user passed a Direct .mp3 / GitHub file link
+                        const normalizedUrl = normalizeGitHubMp3Url(query);
+                        if (/^https?:\/\/.+\.(mp3|m4a|ogg|wav)(\?.*)?$/i.test(normalizedUrl) || normalizedUrl.includes('raw.githubusercontent.com')) {
+                            const rawFileName = normalizedUrl.split('/').pop().split('?')[0];
+                            const cleanTitle = decodeURIComponent(rawFileName.replace(/\.(mp3|m4a|ogg|wav)$/i, '').replace(/[-_]/g, ' ')) || 'GitHub MP3 Track';
+
+                            const songItem = {
+                                title: cleanTitle,
+                                url: normalizedUrl,
+                                duration: 'Direct MP3',
+                                thumbnail: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
+                                author: 'GitHub MP3',
+                                isDirectMp3: true
+                            };
+
+                            requestQueue.push(songItem);
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Added Direct MP3 to Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n🔗 Source: GitHub / Direct MP3\n\n_Type !play to broadcast immediately._`
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        // 3. Otherwise search YouTube
                         await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` }, { quoted: msg });
                         const searchResult = await yts(query);
                         const video = searchResult.videos && searchResult.videos[0];
@@ -702,7 +982,9 @@ async function startRadioBot(forceRestart = false) {
                     }
                     else if (cmd === '!list' || cmd === '!queue') {
                         if (requestQueue.length === 0) {
-                            await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' }, { quoted: msg });
+                            await sock.sendMessage(remoteJid, {
+                                text: `${nowPlaying ? `🎶 *Now Playing:* ${nowPlaying.title}\n\n` : ''}📭 Your upcoming queue is empty. Use \`!add <song>\` or \`!sync\` to add tracks.`
+                            }, { quoted: msg });
                             continue;
                         }
 
@@ -711,7 +993,7 @@ async function startRadioBot(forceRestart = false) {
                             .join('\n');
 
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *Your Personal Request List:*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song now)`
+                            text: `${nowPlaying ? `🎶 *Now Playing:* ${nowPlaying.title}\n\n` : ''}📻 *Your Personal Request List:*\n\n${listString}\n\n*Controls:*\n• \`!skip\` or \`!next\` (Skip current song)\n• \`!stop\` (Stop current song)\n• \`!remove <number>\` / \`!top <number>\`\n• \`!autodj\` (Continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Broadcast now)`
                         }, { quoted: msg });
                     }
                     else if (cmd === '!remove') {
@@ -739,8 +1021,38 @@ async function startRadioBot(forceRestart = false) {
                             text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
                         }, { quoted: msg });
                     }
+                    else if (cmd === '!skip' || cmd === '!next') {
+                        const skippedTitle = nowPlaying ? nowPlaying.title : null;
+                        if (skippedTitle) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `⏭️ Skipping *${skippedTitle}*...`
+                            }, { quoted: msg });
+                        }
+                        await broadcastNextSong(remoteJid, true);
+                    }
+                    else if (cmd === '!stop') {
+                        if (autoDjTimer) {
+                            clearTimeout(autoDjTimer);
+                            autoDjTimer = null;
+                        }
+                        if (currentDownloadAbort) {
+                            try { currentDownloadAbort(); } catch (e) {}
+                            currentDownloadAbort = null;
+                        }
+                        if (lastPlayedAudioKey && lastPlayedJid) {
+                            try {
+                                await sock.sendMessage(lastPlayedJid, { delete: lastPlayedAudioKey });
+                                lastPlayedAudioKey = null;
+                            } catch (e) {}
+                        }
+                        const stoppedTitle = nowPlaying ? nowPlaying.title : 'current playback';
+                        nowPlaying = null;
+                        await sock.sendMessage(remoteJid, {
+                            text: `⏹️ Stopped *${stoppedTitle}* and removed the audio player from chat. Send \`!play\` or \`!skip\` when ready to resume.`
+                        }, { quoted: msg });
+                    }
                     else if (cmd === '!play' || cmd === '!playnext') {
-                        await broadcastNextSong(remoteJid);
+                        await broadcastNextSong(remoteJid, false);
                     }
                 } catch (err) {
                     console.error('Bot Command Error:', err);
