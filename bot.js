@@ -99,13 +99,13 @@ app.get('/', (req, res) => {
                 <p>Send <code>!add Song Name</code> or <code>!list</code> to <strong>+${BOT_NUMBER}</strong> from your personal number (<strong>+${RAW_OWNER}</strong>).</p>
             ` : `
                 <h3>🔑 Step 1: Link Your Bot Number (+${BOT_NUMBER})</h3>
-                <p>Pairing codes expire after 60 seconds! Click the button below to generate a <strong>fresh 8-digit code right now</strong> while your phone is open on the "Enter code" screen:</p>
+                <p>If you get "Try again later", please wait 2 minutes, then click below to generate a fresh pairing code:</p>
                 <div class="code-box">${latestPairingCode || 'CLICK BUTTON BELOW'}</div>
                 <div style="text-align:center;">
                     <a class="btn" href="/pair">🔄 Generate Fresh 8-Digit Code Now</a>
                 </div>
                 <p style="font-size:13px; color:#8696a0; margin-top:16px;">
-                    <strong>Alternative (Faster & Never Fails):</strong> Have a second phone or PC screen? <a href="/qr" style="color:#53bdeb;">Click here to view a Live QR Code</a> and scan it normally from +${BOT_NUMBER}!
+                    <strong>Alternative:</strong> <a href="/qr" style="color:#53bdeb;">Click here to view a Live QR Code</a> and scan it normally!
                 </p>
             `}
         </div>
@@ -120,19 +120,17 @@ app.get('/pair', async (req, res) => {
         return res.redirect('/');
     }
     try {
-        // Restart with a clean session and immediately request a fresh code
         clearAuthFolder();
         latestPairingCode = 'GENERATING...';
         await startRadioBot(true);
-        // Wait 4 seconds for socket handshake and code generation
-        await new Promise(resolve => setTimeout(resolve, 4500));
+        await new Promise(resolve => setTimeout(resolve, 6000));
         res.redirect('/');
     } catch (err) {
         res.status(500).send('Error generating code: ' + err.message);
     }
 });
 
-// Live QR Code Web Page (100% Reliable Backup if Phone Number Pairing fails)
+// Live QR Code Web Page
 app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send('<h2>✅ Bot is already connected!</h2><a href="/">Back to Dashboard</a>');
@@ -164,14 +162,13 @@ app.get('/qr', (req, res) => {
                 ? `<img src="${qrImageUrl}" width="280" height="280" alt="WhatsApp QR" />`
                 : `<p>⏳ Generating fresh QR code... (Page auto-refreshes in 8s)</p>`
             }
-            <p><a href="/">⬅ Back to 8-Digit Code Page</a></p>
+            <p><a href="/">⬅ Back to Dashboard</a></p>
         </div>
     </body>
     </html>
     `);
 });
 
-// Lightweight 24/7 Wake-Up Endpoint for Cron-job.org / UptimeRobot
 app.get('/ping', (req, res) => {
     res.status(200).send('PONG - RadioBot Awake 24/7');
 });
@@ -181,7 +178,6 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`👑 Owner Number configured: +${RAW_OWNER}`);
     console.log(`🤖 Bot Number configured:   +${BOT_NUMBER}`);
 
-    // Built-in Self-Ping every 10 minutes on Render
     if (RENDER_EXTERNAL_URL && RENDER_EXTERNAL_URL.startsWith('https://')) {
         setInterval(() => {
             https.get(`${RENDER_EXTERNAL_URL.replace(/\/+$/, '')}/ping`, (res) => {
@@ -192,7 +188,7 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ============================================================================
-// 2. WHATSAPP BOT CORE LOGIC (BAILEYS WITH RELIABLE CLOUD PAIRING)
+// 2. WHATSAPP BOT CORE LOGIC
 // ============================================================================
 const logger = pino({ level: 'silent' });
 let isStarting = false;
@@ -202,7 +198,6 @@ async function startRadioBot(forceFreshCode = false) {
     isStarting = true;
 
     try {
-        // Close any previous socket cleanly
         if (activeSock) {
             try { activeSock.ev.removeAllListeners(); activeSock.end(undefined); } catch (e) {}
             activeSock = null;
@@ -219,7 +214,6 @@ async function startRadioBot(forceFreshCode = false) {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
-            // REQUIRED exact tuple for WhatsApp phone-number pairing to succeed!
             browser: ['Ubuntu', 'Chrome', '20.0.04'],
             markOnlineOnConnect: true,
             syncFullHistory: false,
@@ -230,7 +224,7 @@ async function startRadioBot(forceFreshCode = false) {
 
         activeSock = sock;
 
-        // Request 8-Digit Pairing Code once the WebSocket is ready
+        // Request pairing code with a safer 5-second delay to let WebSocket handshake complete
         if (!sock.authState.creds.registered && BOT_NUMBER) {
             setTimeout(async () => {
                 try {
@@ -246,7 +240,7 @@ async function startRadioBot(forceFreshCode = false) {
                 } catch (err) {
                     console.error('Pairing code generation error:', err.message);
                 }
-            }, 3500);
+            }, 5000);
         }
 
         sock.ev.on('creds.update', saveCreds);
@@ -264,7 +258,6 @@ async function startRadioBot(forceFreshCode = false) {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 console.log(`Connection closed (Status: ${statusCode}).`);
 
-                // If not registered yet or logged out, wipe partial auth state so next pairing code doesn't fail!
                 if (!sock.authState.creds.registered || statusCode === DisconnectReason.loggedOut) {
                     console.log('Cleaning partial pairing state so a fresh code can be generated...');
                     clearAuthFolder();
@@ -279,11 +272,9 @@ async function startRadioBot(forceFreshCode = false) {
                 latestQrString = null;
                 botConnectionStatus = 'Connected & Ready 24/7 ✅';
                 console.log(`✅ WhatsApp High-Quality Radio Bot (+${BOT_NUMBER}) is Connected!`);
-                console.log(`📩 Send commands (!add, !list, !remove, !top, !play) from +${RAW_OWNER}`);
             }
         });
 
-        // Helper function to broadcast the next song in High Quality Stereo MP3
         async function broadcastNextSong(notifyJid) {
             const destinationJid = targetGroupJid || notifyJid;
             if (requestQueue.length === 0) {
@@ -301,7 +292,7 @@ async function startRadioBot(forceFreshCode = false) {
 
             if (notifyJid) {
                 await sock.sendMessage(notifyJid, {
-                    text: `🎧 Broadcasting *${nextSong.title}* in High-Quality Stereo MP3 to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
+                    text: `🎧 Broadcasting *${nextSong.title}* in High-Quality Stereo MP3...`
                 });
             }
 
@@ -320,9 +311,7 @@ async function startRadioBot(forceFreshCode = false) {
                     console.error('Audio download error:', err.message);
                     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                     if (notifyJid) {
-                        await sock.sendMessage(notifyJid, {
-                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Skipping to next song...`
-                        });
+                        await sock.sendMessage(notifyJid, { text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Skipping...` });
                     }
                     if (requestQueue.length > 0) {
                         setTimeout(() => broadcastNextSong(notifyJid), 2000);
@@ -335,7 +324,7 @@ async function startRadioBot(forceFreshCode = false) {
                         await sock.sendMessage(destinationJid, {
                             audio: fs.readFileSync(tempFilePath),
                             mimetype: 'audio/mpeg',
-                            ptt: false, // FALSE = Crystal Clear Stereo Music Player
+                            ptt: false,
                             fileName: `${nextSong.title}.mp3`,
                             contextInfo: {
                                 externalAdReply: {
@@ -373,7 +362,6 @@ async function startRadioBot(forceFreshCode = false) {
             }
         }
 
-        // Listen for commands
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             const msg = messages[0];
@@ -403,7 +391,7 @@ async function startRadioBot(forceFreshCode = false) {
                 if (cmd === '!bind' && isGroup && isOwner) {
                     targetGroupJid = remoteJid;
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *RadioBot (+${BOT_NUMBER}) Linked!* High-quality requested songs will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
+                        text: `📻 *RadioBot (+${BOT_NUMBER}) Linked!* Requested songs will now play in this group.`
                     });
                     return;
                 }
@@ -412,16 +400,16 @@ async function startRadioBot(forceFreshCode = false) {
 
                 if (cmd === '!add') {
                     if (!query) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>`' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name>`' });
                         return;
                     }
 
-                    await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` });
+                    await sock.sendMessage(remoteJid, { text: `🔎 Searching audio for: *${query}*...` });
                     const searchResult = await yts(query);
                     const video = searchResult.videos && searchResult.videos[0];
 
                     if (!video) {
-                        await sock.sendMessage(remoteJid, { text: '❌ Could not find that song. Try another keyword.' });
+                        await sock.sendMessage(remoteJid, { text: '❌ Could not find that song.' });
                         return;
                     }
 
@@ -436,12 +424,12 @@ async function startRadioBot(forceFreshCode = false) {
                     requestQueue.push(songItem);
 
                     await sock.sendMessage(remoteJid, {
-                        text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately to the group._`
+                        text: `✅ *Added to Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*`
                     });
                 }
                 else if (cmd === '!list' || cmd === '!queue') {
                     if (requestQueue.length === 0) {
-                        await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' });
+                        await sock.sendMessage(remoteJid, { text: '📭 Request queue is empty. Use `!add <song>`.' });
                         return;
                     }
 
@@ -450,32 +438,32 @@ async function startRadioBot(forceFreshCode = false) {
                         .join('\n');
 
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *Your Personal Request List (+${RAW_OWNER}):*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song to group now)`
+                        text: `📻 *Your Request List:*\n\n${listString}`
                     });
                 }
                 else if (cmd === '!remove') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index < 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Invalid song number. Check `!list` first.' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Invalid number.' });
                         return;
                     }
                     const removed = requestQueue.splice(index, 1)[0];
-                    await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` });
+                    await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}*.` });
                 }
                 else if (cmd === '!top') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid song number (2 or higher) to move to #1.' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid number (2 or higher).' });
                         return;
                     }
                     const [promoted] = requestQueue.splice(index, 1);
                     requestQueue.unshift(promoted);
-                    await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` });
+                    await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1!` });
                 }
                 else if (cmd === '!autodj') {
                     autoDjEnabled = !autoDjEnabled;
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
+                        text: `📻 *Auto-DJ Mode:* ${autoDjEnabled ? '✅ ENABLED' : '⏸️ DISABLED'}`
                     });
                 }
                 else if (cmd === '!play' || cmd === '!playnext') {
@@ -483,21 +471,16 @@ async function startRadioBot(forceFreshCode = false) {
                 }
             } catch (err) {
                 console.error('Bot Command Error:', err);
-                await sock.sendMessage(remoteJid, { text: '⚠️ Error processing command: ' + err.message });
             }
         });
     } catch (initErr) {
         isStarting = false;
-        console.error('Bot initialization error, retrying in 5s:', initErr.message);
+        console.error('Bot initialization error:', initErr.message);
         setTimeout(() => startRadioBot(false), 5000);
     }
 }
 
-process.on('uncaughtException', (err) => {
-    console.error('Caught exception (Server kept alive):', err.message);
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled rejection (Server kept alive):', reason);
-});
+process.on('uncaughtException', (err) => { console.error('Caught exception:', err.message); });
+process.on('unhandledRejection', (reason) => { console.error('Unhandled rejection:', reason); });
 
 startRadioBot(false);
