@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp High-Quality Radio Bot Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .wa-bg {
+            background-color: #0b141a;
+            background-image: radial-gradient(#1f2c34 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        @keyframes equalize {
+            0%, 100% { height: 6px; }
+            50% { height: 24px; }
+        }
+        .eq-bar {
+            animation: equalize 0.8s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+
+    <!-- Top Navigation -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-bold text-xl shadow-lg shadow-emerald-500/20">
+                    <i class="fa-brands fa-whatsapp"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                        WA RadioBot Studio
+                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">320kbps HQ Mode</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                <button onclick="switchTab('simulator')" id="tab-simulator" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950 transition">
+                    <i class="fa-solid fa-sliders mr-1"></i> Live Simulator & Player
+                </button>
+                <button onclick="switchTab('hosting')" id="tab-hosting" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
+                    <i class="fa-solid fa-server mr-1"></i> Free 24/7 Hosting Guide
+                </button>
+                <button onclick="switchTab('architecture')" id="tab-architecture" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
+                    <i class="fa-solid fa-circle-info mr-1"></i> How Voice/Audio Works
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
+
+        <!-- TAB 1: SIMULATOR & RADIO DASHBOARD -->
+        <div id="view-simulator" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Left Column: Personal DM Chat Simulator -->
+            <div class="lg:col-span-5 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl h-[620px]">
+                <!-- WhatsApp Header -->
+                <div class="bg-[#202c33] px-4 py-3 flex items-center justify-between border-b border-slate-700/60">
+                    <div class="flex items-center gap-3">
+                        <div class="relative">
+                            <div class="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold">
+                                <i class="fa-solid fa-radio"></i>
+                            </div>
+                            <span class="w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#202c33] absolute bottom-0 right-0"></span>
+                        </div>
+                        <div>
+                            <h2 class="font-semibold text-sm text-slate-100">RadioBot (+91 9656977828)</h2>
+                            <p class="text-[11px] text-emerald-400">Admin DM (+91 9539601481) • Exclusive Queue Control</p>
+                        </div>
+                    </div>
+                    <span class="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700">Owner Locked</span>
+                </div>
+
+                <!-- Chat Messages Area -->
+                <div id="chat-box" class="flex-1 wa-bg p-4 overflow-y-auto space-y-3 text-sm">
+                    <!-- Welcome Bot Message -->
+                    <div class="bg-[#202c33] text-slate-200 p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow border border-slate-700/40">
+                        <p class="font-semibold text-emerald-400 text-xs mb-1">RadioBot (+91 9656977828)</p>
+                        <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Your numbers are now hardcoded into <code class="text-emerald-300">bot.js</code>. Message me from your personal WhatsApp to edit the group's playlist privately:</p>
+                        <ul class="text-[11px] font-mono text-slate-300 mt-2 space-y-1 bg-slate-900/70 p-2 rounded-lg">
+                            <li><span class="text-emerald-400">!add</span> [Song Name]</li>
+                            <li><span class="text-emerald-400">!list</span> (View current queue)</li>
+                            <li><span class="text-emerald-400">!remove</span> [Number]</li>
+                            <li><span class="text-emerald-400">!top</span> [Number] (Move song to #1)</li>
+                            <li><span class="text-emerald-400">!autodj</span> (Toggle 24/7 non-stop radio)</li>
+                            <li><span class="text-emerald-400">!play</span> (Send HQ track to Group)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Quick Command Chips -->
+                <div class="bg-[#182229] px-3 py-2 flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 text-xs">
+                    <button onclick="sendQuickCmd('!list')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-full whitespace-nowrap border border-slate-700">!list</button>
+                    <button onclick="sendQuickCmd('!add Blinding Lights - The Weeknd')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Blinding Lights</button>
+                    <button onclick="sendQuickCmd('!add Levitating - Dua Lipa')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Levitating</button>
+                    <button onclick="sendQuickCmd('!play')" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 rounded-full whitespace-nowrap border border-emerald-500/30">▶ !play next</button>
+                </div>
+
+                <!-- Input Bar -->
+                <form onsubmit="handleChatSubmit(event)" class="bg-[#202c33] p-3 flex items-center gap-2">
+                    <input id="chat-input" type="text" placeholder="Type !add Song Name, !remove 2, !list..." 
+                        class="flex-1 bg-[#2a3942] text-slate-100 placeholder-slate-400 text-sm px-4 py-2.5 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                    <button type="submit" class="w-10 h-10 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center font-bold transition">
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </form>
+            </div>
+
+            <!-- Right Column: Live Group Radio Player & Visual Queue Editor -->
+            <div class="lg:col-span-7 flex flex-col gap-6">
+                
+                <!-- Group Live Radio Stream Card -->
+                <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-800 rounded-2xl p-5 shadow-xl">
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
+                            <span class="text-xs font-bold uppercase tracking-wider text-emerald-400">Live Group Radio Broadcast</span>
+                        </div>
+                        <span class="text-xs text-slate-400 bg-slate-800/90 px-3 py-1 rounded-full border border-slate-700">
+                            <i class="fa-solid fa-users text-emerald-400 mr-1"></i> Connected to: <strong>Friends Hangout Group</strong>
+                        </span>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row items-center gap-5 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+                        <div class="w-20 h-20 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 text-3xl shadow-lg relative overflow-hidden shrink-0">
+                            <i class="fa-solid fa-compact-disc animate-spin" style="animation-duration: 5s;"></i>
+                        </div>
+                        <div class="flex-1 text-center sm:text-left">
+                            <p class="text-xs text-emerald-400 font-semibold uppercase tracking-wide">Now Playing in Group (320kbps AAC/MP3)</p>
+                            <h3 id="now-playing-title" class="text-xl font-bold text-white mt-0.5">Starboy - The Weeknd (HQ Radio Mix)</h3>
+                            <p id="now-playing-meta" class="text-xs text-slate-400 mt-1">Requested via Personal DM (+91 9539601481) • Crystal Clear Audio Stream</p>
+                            
+                            <!-- Synth Audio Preview Controls -->
+                            <div class="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-3">
+                                <button onclick="toggleRadioAudio()" id="radio-play-btn" class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-2 transition">
+                                    <i class="fa-solid fa-play" id="radio-play-icon"></i>
+                                    <span id="radio-play-text">Test HQ Radio Synth Stream</span>
+                                </button>
+                                <button onclick="playNextInQueue()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs flex items-center gap-1.5 border border-slate-700 transition">
+                                    <i class="fa-solid fa-forward-step"></i> Skip to Next Song
+                                </button>
+                                <!-- Equalizer Bars -->
+                                <div id="eq-container" class="hidden items-end gap-1 h-6 px-2">
+                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.1s"></div>
+                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.3s"></div>
+                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.2s"></div>
+                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.4s"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Request Queue Manager -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex-1 flex flex-col shadow-xl">
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                        <div>
+                            <h3 class="font-bold text-base text-white flex items-center gap-2">
+                                <i class="fa-solid fa-list-ol text-emerald-400"></i>
+                                Personal Request Queue (Synced with DM)
+                            </h3>
+                            <p class="text-xs text-slate-400">Edit songs here or via your personal WhatsApp chat on the left.</p>
+                        </div>
+                        <span id="queue-count" class="text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
+                            3 Songs Queued
+                        </span>
+                    </div>
+
+                    <!-- Add Song Direct Bar -->
+                    <form onsubmit="handleDirectAdd(event)" class="flex gap-2 mb-4">
+                        <input id="direct-song-input" type="text" placeholder="Quick add song title or YouTube URL to queue..." 
+                            class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
+                        <button type="submit" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-xl transition shrink-0">
+                            <i class="fa-solid fa-plus mr-1"></i> Add to Queue
+                        </button>
+                    </form>
+
+                    <!-- Queue List -->
+                    <div id="queue-list" class="space-y-2 overflow-y-auto max-h-[250px] pr-1">
+                        <!-- Populated via JS -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- TAB 2: FREE 24/7 HOSTING GUIDE -->
+        <div id="view-hosting" class="hidden space-y-6">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                            <i class="fa-solid fa-bolt text-emerald-400"></i>
+                            Your Pre-Configured 24/7 Free Cloud Setup
+                        </h2>
+                        <p class="text-sm text-slate-400 mt-1">
+                            Your Owner Number (<code class="text-emerald-400">919539601481</code>) and Bot Number (<code class="text-emerald-400">919656977828</code>) are already baked into <code class="text-slate-200">bot.js</code>!
+                        </p>
+                    </div>
+                    <div class="bg-slate-950 border border-emerald-500/30 rounded-xl px-4 py-2.5 text-xs space-y-1">
+                        <div>👑 <strong>Owner (You):</strong> <span class="text-emerald-400 font-mono">+91 9539601481</span></div>
+                        <div>🤖 <strong>Bot Account:</strong> <span class="text-teal-300 font-mono">+91 9656977828</span></div>
+                    </div>
+                </div>
+
+                <!-- Step-by-Step 24/7 Cloud Checklist -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+                    <!-- Step 1 -->
+                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="font-bold text-base text-white">Step 1: Upload 2 Files</span>
+                                <span class="text-[11px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-semibold">2 Mins</span>
+                            </div>
+                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                                Create a free GitHub account and upload <code class="text-emerald-400">bot.js</code> and <code class="text-emerald-400">package.json</code> into a new repository.
+                            </p>
+                        </div>
+                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
+                            <div>File 1: <span class="text-emerald-400">bot.js</span> (Fixed & Ready)</div>
+                            <div>File 2: <span class="text-emerald-400">package.json</span> (Fixed & Ready)</div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="font-bold text-base text-white">Step 2: Link 9656977828</span>
+                                <span class="text-[11px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-semibold">No QR Needed</span>
+                            </div>
+                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                                Deploy on <strong>Render.com</strong> or <strong>Koyeb.com</strong> (Free Web Service). Open your live Render URL or logs to see the 8-digit code, then enter it on the phone running <strong>9656977828</strong>!
+                            </p>
+                        </div>
+                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
+                            <div>WhatsApp &rarr; <span class="text-blue-400">Linked Devices</span></div>
+                            <div>Tap: <span class="text-blue-400">Link with phone number</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="font-bold text-base text-white">Step 3: Keep Awake 24/7</span>
+                                <span class="text-[11px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-semibold">100% Free Forever</span>
+                            </div>
+                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                                Free cloud servers sleep after 15 mins if no one visits them. Paste your Render `/ping` link into <strong>cron-job.org</strong> or <strong>UptimeRobot.com</strong> (set to 5 minutes) so it never sleeps!
+                            </p>
+                        </div>
+                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
+                            <div>Endpoint: <span class="text-purple-400">/ping</span></div>
+                            <div>Interval: <span class="text-purple-400">Every 5 Minutes</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive 24/7 Ping URL Helper -->
+                <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div class="flex-1 w-full">
+                        <label class="text-xs font-semibold text-slate-300 block mb-1">Generate Your 24/7 UptimeRobot / Cron-Job Ping URL:</label>
+                        <input id="render-url-input" oninput="updatePingUrl()" type="text" placeholder="Paste your free Render URL here (e.g. https://wa-radiobot.onrender.com)" 
+                            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
+                    </div>
+                    <div class="w-full sm:w-auto bg-slate-900 border border-emerald-500/30 px-4 py-2.5 rounded-lg text-xs font-mono text-emerald-400 shrink-0">
+                        Ping URL: <span id="generated-ping-url">https://your-app.onrender.com/ping</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: HOW VOICE CHAT VS HQ AUDIO WORKS -->
+        <div id="view-architecture" class="hidden space-y-6">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+                <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-waveform-lines text-emerald-400"></i>
+                    Why Voice Notes Sound Bad & How Our Bot Fixes It
+                </h2>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    When people try to play music over a standard WhatsApp Voice Call or send it as a Voice Note (<code class="text-amber-400">ptt: true</code>), WhatsApp compresses the audio using a low-bitrate speech codec (Opus Mono 16kHz) meant only for human talking. That makes music sound muffled and robotic.
+                </p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    <div class="bg-slate-950 p-4 rounded-xl border border-emerald-500/30">
+                        <h3 class="font-bold text-emerald-400 text-sm mb-2">✅ Solution A: Uncompressed Stereo MP3 Stream</h3>
+                        <p class="text-xs text-slate-400 leading-relaxed">
+                            In the <code class="text-slate-200">bot.js</code> code I generated for you, we set <code class="text-emerald-400">mimetype: 'audio/mpeg'</code> and <code class="text-emerald-400">ptt: false</code>. This forces WhatsApp to keep the full 320kbps stereo music quality with album art and song title right inside the group chat!
+                        </p>
+                    </div>
+                    <div class="bg-slate-950 p-4 rounded-xl border border-emerald-500/30">
+                        <h3 class="font-bold text-emerald-400 text-sm mb-2">✅ Solution B: Live Group Web Radio Link</h3>
+                        <p class="text-xs text-slate-400 leading-relaxed">
+                            Want continuous radio while everyone is hanging out in the group? The bot hosts a live web radio stream (`https://your-bot.onrender.com/stream`). Anyone in the group clicks it once, and it automatically plays the songs you queue from your private DM!
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // Initial Request Queue State
+        let songQueue = [
+            { id: 1, title: "Blinding Lights - The Weeknd", addedBy: "You (+91 9539601481)", duration: "3:20" },
+            { id: 2, title: "Kesariya - Arijit Singh (HQ Stereo)", addedBy: "You (+91 9539601481)", duration: "4:28" },
+            { id: 3, title: "Believer - Imagine Dragons", addedBy: "You (+91 9539601481)", duration: "3:24" }
+        ];
+
+        let isRadioPlaying = false;
+        let synthLoop = null;
+        let synth = null;
+
+        function switchTab(tab) {
+            ['simulator', 'hosting', 'architecture'].forEach(t => {
+                document.getElementById('view-' + t).classList.add('hidden');
+                const btn = document.getElementById('tab-' + t);
+                btn.classList.remove('bg-emerald-500', 'text-slate-950');
+                btn.classList.add('text-slate-300');
+            });
+            document.getElementById('view-' + tab).classList.remove('hidden');
+            const activeBtn = document.getElementById('tab-' + tab);
+            activeBtn.classList.add('bg-emerald-500', 'text-slate-950');
+            activeBtn.classList.remove('text-slate-300');
+        }
+
+        function renderQueue() {
+            const listEl = document.getElementById('queue-list');
+            const countEl = document.getElementById('queue-count');
+            countEl.textContent = `${songQueue.length} Song${songQueue.length === 1 ? '' : 's'} Queued`;
+
+            if (songQueue.length === 0) {
+                listEl.innerHTML = `
+                    <div class="text-center py-8 text-slate-500 text-xs border border-dashed border-slate-800 rounded-xl">
+                        Queue is empty. Use <code class="text-emerald-400">!add Song Name</code> in your DM!
+                    </div>`;
+                return;
+            }
+
+            listEl.innerHTML = songQueue.map((song, idx) => `
+                <div class="flex items-center justify-between bg-slate-950 border border-slate-800/90 px-3.5 py-2.5 rounded-xl hover:border-slate-700 transition">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <span class="w-6 h-6 rounded-lg bg-slate-800 text-emerald-400 font-mono text-xs flex items-center justify-center font-bold shrink-0">
+                            ${idx + 1}
+                        </span>
+                        <div class="truncate">
+                            <p class="text-xs font-semibold text-slate-100 truncate">${song.title}</p>
+                            <p class="text-[10px] text-slate-400">HQ 320kbps • Edited via Personal DM (+91 9539601481)</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1.5 shrink-0 ml-2">
+                        ${idx > 0 ? `
+                        <button onclick="promoteSong(${idx})" title="Move to #1 (!top ${idx+1})" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs flex items-center justify-center border border-slate-800">
+                            <i class="fa-solid fa-arrow-up"></i>
+                        </button>` : ''}
+                        <button onclick="removeSong(${idx})" title="Remove (!remove ${idx+1})" class="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs flex items-center justify-center border border-red-500/20">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function appendChatMessage(sender, text, isUser = false) {
+            const box = document.getElementById('chat-box');
+            const msgDiv = document.createElement('div');
+            if (isUser) {
+                msgDiv.className = "bg-[#005c4b] text-white p-2.5 px-3.5 rounded-2xl rounded-tr-none max-w-[80%] ml-auto shadow text-xs";
+                msgDiv.textContent = text;
+            } else {
+                msgDiv.className = "bg-[#202c33] text-slate-200 p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow border border-slate-700/40 text-xs whitespace-pre-line";
+                msgDiv.innerHTML = `<p class="font-semibold text-emerald-400 text-[11px] mb-1">${sender}</p>${text}`;
+            }
+            box.appendChild(msgDiv);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function processBotCommand(rawText) {
+            const text = rawText.trim();
+            appendChatMessage("You (+91 9539601481)", text, true);
+
+            const lower = text.toLowerCase();
+
+            setTimeout(() => {
+                if (lower.startsWith('!add ')) {
+                    const songTitle = text.substring(5).trim();
+                    if (!songTitle) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Please provide a song name, e.g. `!add Shape of You`");
+                        return;
+                    }
+                    songQueue.push({ id: Date.now(), title: songTitle, addedBy: "You (+91 9539601481)", duration: "3:45" });
+                    renderQueue();
+                    appendChatMessage("RadioBot (+91 9656977828)", `✅ Added to Group Radio Queue (#${songQueue.length}):\n🎵 *${songTitle}* (High-Quality Stereo)`);
+                } 
+                else if (lower === '!list' || lower === '!queue') {
+                    if (songQueue.length === 0) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty. Add songs with `!add [song name]`.");
+                    } else {
+                        const formatted = songQueue.map((s, i) => `${i + 1}. 🎵 ${s.title}`).join('\n');
+                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}\n\n_Reply !remove [number] or !top [number] to edit._`);
+                    }
+                }
+                else if (lower.startsWith('!remove ')) {
+                    const idx = parseInt(text.substring(8).trim(), 10) - 1;
+                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Invalid song number. Type `!list` to check numbers.");
+                        return;
+                    }
+                    const removed = songQueue.splice(idx, 1)[0];
+                    renderQueue();
+                    appendChatMessage("RadioBot (+91 9656977828)", `🗑️ Removed *${removed.title}* from the request list.`);
+                }
+                else if (lower.startsWith('!top ')) {
+                    const idx = parseInt(text.substring(5).trim(), 10) - 1;
+                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Provide a valid song number (2 or higher) to move to #1.");
+                        return;
+                    }
+                    const item = songQueue.splice(idx, 1)[0];
+                    songQueue.unshift(item);
+                    renderQueue();
+                    appendChatMessage("RadioBot (+91 9656977828)", `⬆️ Moved *${item.title}* to #1 in the queue!`);
+                }
+                else if (lower === '!play' || lower === '!playnext') {
+                    playNextInQueue();
+                }
+                else {
+                    appendChatMessage("RadioBot (+91 9656977828)", "🤖 Commands available in your personal DM:\n• `!add [Song]`\n• `!list`\n• `!remove [Number]`\n• `!top [Number]`\n• `!play` (Broadcast next song to Group)");
+                }
+            }, 250);
+        }
+
+        function handleChatSubmit(e) {
+            e.preventDefault();
+            const input = document.getElementById('chat-input');
+            if (!input.value.trim()) return;
+            processBotCommand(input.value);
+            input.value = '';
+        }
+
+        function sendQuickCmd(cmd) {
+            processBotCommand(cmd);
+        }
+
+        function handleDirectAdd(e) {
+            e.preventDefault();
+            const input = document.getElementById('direct-song-input');
+            if (!input.value.trim()) return;
+            processBotCommand(`!add ${input.value.trim()}`);
+            input.value = '';
+        }
+
+        function removeSong(idx) {
+            processBotCommand(`!remove ${idx + 1}`);
+        }
+
+        function promoteSong(idx) {
+            processBotCommand(`!top ${idx + 1}`);
+        }
+
+        function updatePingUrl() {
+            const raw = document.getElementById('render-url-input').value.trim().replace(/\/+$/, '');
+            const out = document.getElementById('generated-ping-url');
+            out.textContent = (raw || 'https://your-app.onrender.com') + '/ping';
+        }
+
+        function playNextInQueue() {
+            if (songQueue.length === 0) {
+                appendChatMessage("RadioBot (+91 9656977828)", "📭 Queue is empty! Add songs first using `!add [Song Name]`.");
+                return;
+            }
+            const next = songQueue.shift();
+            renderQueue();
+            document.getElementById('now-playing-title').textContent = next.title;
+            document.getElementById('now-playing-meta').textContent = `Broadcasting 320kbps Stereo MP3 to Group • Queued by ${next.addedBy}`;
+            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Broadcasting to Group in High-Quality Stereo:*\n🎵 ${next.title}\n📡 Bitrate: 320kbps MP3 (Uncompressed)`);
+        }
+
+        async function toggleRadioAudio() {
+            const btnIcon = document.getElementById('radio-play-icon');
+            const btnText = document.getElementById('radio-play-text');
+            const eq = document.getElementById('eq-container');
+
+            if (!isRadioPlaying) {
+                await Tone.start();
+                if (!synth) {
+                    synth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "triangle" },
+                        envelope: { attack: 0.05, decay: 0.2, sustain: 0.3, release: 0.8 }
+                    }).toDestination();
+                    synth.volume.value = -8;
+                }
+                const chords = [
+                    ["C4", "E4", "G4", "B4"],
+                    ["A3", "C4", "E4", "G4"],
+                    ["F3", "A3", "C4", "E4"],
+                    ["G3", "B3", "D4", "F4"]
+                ];
+                let step = 0;
+                synthLoop = new Tone.Loop((time) => {
+                    synth.triggerAttackRelease(chords[step % chords.length], "2n", time);
+                    step++;
+                }, "2n").start(0);
+                Tone.Transport.start();
+
+                isRadioPlaying = true;
+                btnIcon.className = "fa-solid fa-pause";
+                btnText.textContent = "Pause HQ Stream";
+                eq.classList.remove('hidden');
+                eq.classList.add('flex');
+            } else {
+                if (synthLoop) synthLoop.stop();
+                Tone.Transport.stop();
+                isRadioPlaying = false;
+                btnIcon.className = "fa-solid fa-play";
+                btnText.textContent = "Test HQ Radio Synth Stream";
+                eq.classList.add('hidden');
+                eq.classList.remove('flex');
+            }
+        }
+
+        // Initialize Queue on Load
+        renderQueue();
+    </script>
+</body>
+</html>
