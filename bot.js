@@ -2,16 +2,10 @@
  * ============================================================================
  * WHATSAPP HIGH-QUALITY RADIO & PERSONAL QUEUE BOT (24/7 CLOUD EDITION)
  * ============================================================================
- * Pre-Configured Numbers:
- * - Owner Number (Controls Queue via DM): +91 9539601481
- * - Bot Number   (8-Digit Pairing Login): +91 9656977828
- *
- * Features:
- * 1. Manage the song request list privately from your Personal DM (!add, !remove, !top, !list).
- * 2. Sends crystal-clear High-Quality Stereo MP3 audio (ptt: false) to your Group,
- *    avoiding WhatsApp's muffled voice-note compression.
- * 3. Includes an Express Web Radio & Keep-Alive Server so you can host it 100% FREE
- *    24/7 on Render.com, Koyeb, or Android Termux.
+ * Pre-Configured Numbers & Live Render Server:
+ * - Live URL:     https://wabot-4nbu.onrender.com
+ * - Owner Number: +91 9539601481 (Controls Queue via DM)
+ * - Bot Number:   +91 9656977828 (8-Digit Pairing Login)
  * ============================================================================
  */
 
@@ -20,11 +14,9 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    Browsers
+    makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const qrcode = require('qrcode-terminal');
 const express = require('express');
 const yts = require('yt-search');
 const ytdl = require('@distube/ytdl-core');
@@ -33,9 +25,9 @@ const path = require('path');
 const https = require('https');
 
 // ============================================================================
-// CONFIGURATION (PRE-CONFIGURED FOR YOUR NUMBERS)
+// CONFIGURATION (PRE-CONFIGURED FOR YOUR NUMBERS & RENDER URL)
 // ============================================================================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Your Personal WhatsApp Number (Controls the Queue Privately via DM)
 const RAW_OWNER = (process.env.OWNER_NUMBER || '919539601481').replace(/[^0-9]/g, '');
@@ -44,39 +36,139 @@ const OWNER_NUMBER = RAW_OWNER + '@s.whatsapp.net';
 // Your Bot WhatsApp Number (Used for 8-Digit Cloud Pairing Code Login)
 const BOT_NUMBER = (process.env.BOT_NUMBER || '919656977828').replace(/[^0-9]/g, '');
 
-// Optional: Your Render/Koyeb App URL for built-in 24/7 self-pinging
-const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || '';
+// Your Live Render URL for automatic 24/7 self-pinging
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4nbu.onrender.com';
 
-// In-Memory State for Personal Request Queue & Active Group
+const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
+
+// In-Memory State
 let requestQueue = [];
-let targetGroupJid = null; // Set automatically when you type !bind inside any group
+let targetGroupJid = null;
 let nowPlaying = null;
-let autoDjEnabled = true;  // Automatically plays next song in queue like a real radio
+let autoDjEnabled = true;
 let latestPairingCode = null;
+let latestQrString = null;
 let botConnectionStatus = 'Starting up...';
 let autoDjTimer = null;
+let activeSock = null;
+let isConnected = false;
+
+// Helper to wipe incomplete pairing sessions so new codes never fail
+function clearAuthFolder() {
+    try {
+        if (fs.existsSync(AUTH_DIR)) {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        }
+    } catch (e) {
+        console.error('Could not clear auth folder:', e.message);
+    }
+}
 
 // ============================================================================
-// 1. FREE HOSTING 24/7 KEEP-ALIVE & LIVE WEB RADIO SERVER
+// 1. FREE HOSTING 24/7 KEEP-ALIVE & LIVE PAIRING WEB SERVER
 // ============================================================================
 const app = express();
 app.use(express.json());
 
-// Main Status & Cloud Pairing Code Dashboard
+// Interactive Status & Instant Pairing Dashboard
 app.get('/', (req, res) => {
-    res.status(200).json({
-        status: 'Online 24/7',
-        whatsappConnection: botConnectionStatus,
-        ownerAdminNumber: '+' + RAW_OWNER,
-        botAccountNumber: '+' + BOT_NUMBER,
-        loginPairingCode: latestPairingCode || 'Generating 8-digit code... Refresh in 5 seconds',
-        howToLinkBot: `Open WhatsApp on +${BOT_NUMBER} -> Linked Devices -> Link a Device -> Link with phone number instead -> Enter loginPairingCode`,
-        autoDjRadioMode: autoDjEnabled ? 'ON (Continuous Radio)' : 'OFF (Manual !play)',
-        nowPlaying: nowPlaying ? nowPlaying.title : 'Idle',
-        queuedSongsCount: requestQueue.length,
-        queuedSongs: requestQueue.map((s, i) => `${i + 1}. ${s.title} (${s.duration})`),
-        targetGroup: targetGroupJid || `Not bound yet (Send !bind inside your group from +${RAW_OWNER})`
-    });
+    res.status(200).send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>WA RadioBot Live Server</title>
+        <style>
+            body { font-family: system-ui, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 620px; margin: 0 auto; }
+            .card { background: #1f2c34; border-radius: 16px; padding: 22px; margin-bottom: 16px; border: 1px solid #2a3942; }
+            .code-box { font-size: 32px; font-weight: 800; letter-spacing: 4px; color: #00a884; background: #111b21; padding: 16px; border-radius: 12px; text-align: center; margin: 14px 0; border: 2px dashed #00a884; }
+            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; margin-top: 8px; }
+            .status { color: #00a884; font-weight: bold; }
+            code { background: #111b21; padding: 2px 6px; border-radius: 4px; color: #53bdeb; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>📻 WhatsApp RadioBot (+${BOT_NUMBER})</h2>
+            <p><strong>Status:</strong> <span class="status">${botConnectionStatus}</span></p>
+            <p><strong>Owner DM Controller:</strong> +${RAW_OWNER}</p>
+            <hr style="border-color:#2a3942; margin: 16px 0;">
+            ${isConnected ? `
+                <h3 style="color:#00a884;">✅ Bot is Linked & Online 24/7!</h3>
+                <p>Send <code>!add Song Name</code> or <code>!list</code> to <strong>+${BOT_NUMBER}</strong> from your personal number (<strong>+${RAW_OWNER}</strong>).</p>
+            ` : `
+                <h3>🔑 Step 1: Link Your Bot Number (+${BOT_NUMBER})</h3>
+                <p>Pairing codes expire after 60 seconds! Click the button below to generate a <strong>fresh 8-digit code right now</strong> while your phone is open on the "Enter code" screen:</p>
+                <div class="code-box">${latestPairingCode || 'CLICK BUTTON BELOW'}</div>
+                <div style="text-align:center;">
+                    <a class="btn" href="/pair">🔄 Generate Fresh 8-Digit Code Now</a>
+                </div>
+                <p style="font-size:13px; color:#8696a0; margin-top:16px;">
+                    <strong>Alternative (Faster & Never Fails):</strong> Have a second phone or PC screen? <a href="/qr" style="color:#53bdeb;">Click here to view a Live QR Code</a> and scan it normally from +${BOT_NUMBER}!
+                </p>
+            `}
+        </div>
+    </body>
+    </html>
+    `);
+});
+
+// Fresh On-Demand 8-Digit Pairing Code Generator
+app.get('/pair', async (req, res) => {
+    if (isConnected) {
+        return res.redirect('/');
+    }
+    try {
+        // Restart with a clean session and immediately request a fresh code
+        clearAuthFolder();
+        latestPairingCode = 'GENERATING...';
+        await startRadioBot(true);
+        // Wait 4 seconds for socket handshake and code generation
+        await new Promise(resolve => setTimeout(resolve, 4500));
+        res.redirect('/');
+    } catch (err) {
+        res.status(500).send('Error generating code: ' + err.message);
+    }
+});
+
+// Live QR Code Web Page (100% Reliable Backup if Phone Number Pairing fails)
+app.get('/qr', (req, res) => {
+    if (isConnected) {
+        return res.send('<h2>✅ Bot is already connected!</h2><a href="/">Back to Dashboard</a>');
+    }
+    const qrImageUrl = latestQrString
+        ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(latestQrString)}`
+        : null;
+
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="refresh" content="8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Scan WhatsApp QR Code</title>
+        <style>
+            body { font-family: system-ui, sans-serif; background: #0b141a; color: #fff; text-align: center; padding: 30px; }
+            .box { background: #1f2c34; padding: 24px; border-radius: 16px; display: inline-block; max-width: 380px; }
+            img { background: white; padding: 12px; border-radius: 12px; margin: 16px 0; }
+            a { color: #00a884; }
+        </style>
+    </head>
+    <body>
+        <div class="box">
+            <h2>📷 Scan QR with +${BOT_NUMBER}</h2>
+            <p style="font-size:14px; color:#8696a0;">Open WhatsApp on +${BOT_NUMBER} &rarr; Linked Devices &rarr; Link a Device &rarr; Scan QR</p>
+            ${qrImageUrl
+                ? `<img src="${qrImageUrl}" width="280" height="280" alt="WhatsApp QR" />`
+                : `<p>⏳ Generating fresh QR code... (Page auto-refreshes in 8s)</p>`
+            }
+            <p><a href="/">⬅ Back to 8-Digit Code Page</a></p>
+        </div>
+    </body>
+    </html>
+    `);
 });
 
 // Lightweight 24/7 Wake-Up Endpoint for Cron-job.org / UptimeRobot
@@ -84,30 +176,12 @@ app.get('/ping', (req, res) => {
     res.status(200).send('PONG - RadioBot Awake 24/7');
 });
 
-// Stream current song in high quality to any browser if group members want continuous web radio
-app.get('/stream', (req, res) => {
-    if (!nowPlaying || !nowPlaying.url) {
-        return res.status(404).send('No song is currently active on the radio.');
-    }
-    res.setHeader('Content-Type', 'audio/mpeg');
-    const stream = ytdl(nowPlaying.url, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25
-    });
-    stream.on('error', (err) => {
-        console.error('Web stream error:', err.message);
-        if (!res.headersSent) res.status(500).send('Stream error');
-    });
-    stream.pipe(res);
-});
-
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Free-Hosting 24/7 Keep-Alive & Radio Server running on port ${PORT}`);
     console.log(`👑 Owner Number configured: +${RAW_OWNER}`);
     console.log(`🤖 Bot Number configured:   +${BOT_NUMBER}`);
 
-    // Built-in Self-Ping every 10 minutes if hosted on Render
+    // Built-in Self-Ping every 10 minutes on Render
     if (RENDER_EXTERNAL_URL && RENDER_EXTERNAL_URL.startsWith('https://')) {
         setInterval(() => {
             https.get(`${RENDER_EXTERNAL_URL.replace(/\/+$/, '')}/ping`, (res) => {
@@ -118,13 +192,23 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ============================================================================
-// 2. WHATSAPP BOT CORE LOGIC (BAILEYS WITH 8-DIGIT CLOUD PAIRING)
+// 2. WHATSAPP BOT CORE LOGIC (BAILEYS WITH RELIABLE CLOUD PAIRING)
 // ============================================================================
 const logger = pino({ level: 'silent' });
+let isStarting = false;
 
-async function startRadioBot() {
+async function startRadioBot(forceFreshCode = false) {
+    if (isStarting && !forceFreshCode) return;
+    isStarting = true;
+
     try {
-        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
+        // Close any previous socket cleanly
+        if (activeSock) {
+            try { activeSock.ev.removeAllListeners(); activeSock.end(undefined); } catch (e) {}
+            activeSock = null;
+        }
+
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
         const { version } = await fetchLatestBaileysVersion();
 
         const sock = makeWASocket({
@@ -135,47 +219,64 @@ async function startRadioBot() {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
-            browser: Browsers.ubuntu('Chrome'),
+            // REQUIRED exact tuple for WhatsApp phone-number pairing to succeed!
+            browser: ['Ubuntu', 'Chrome', '20.0.04'],
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true
+            syncFullHistory: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 15000
         });
 
-        // Automatically generate an 8-digit Pairing Code for 919656977828 if not logged in yet
+        activeSock = sock;
+
+        // Request 8-Digit Pairing Code once the WebSocket is ready
         if (!sock.authState.creds.registered && BOT_NUMBER) {
             setTimeout(async () => {
                 try {
-                    const code = await sock.requestPairingCode(BOT_NUMBER);
+                    if (isConnected || sock.authState.creds.registered) return;
+                    const cleanNumber = BOT_NUMBER.replace(/[^0-9]/g, '');
+                    const code = await sock.requestPairingCode(cleanNumber);
                     latestPairingCode = code?.match(/.{1,4}/g)?.join('-') || code;
-                    botConnectionStatus = `Waiting for Pairing Code on +${BOT_NUMBER}`;
+                    botConnectionStatus = `Waiting for Pairing Code (${latestPairingCode}) on +${cleanNumber}`;
                     console.log('\n============================================================');
-                    console.log(`🔑 8-DIGIT WHATSAPP PAIRING CODE FOR +${BOT_NUMBER}: ${latestPairingCode}`);
-                    console.log(`👉 Open WhatsApp on +${BOT_NUMBER} -> Linked Devices -> Link with phone number`);
+                    console.log(`🔑 FRESH 8-DIGIT PAIRING CODE FOR +${cleanNumber}: ${latestPairingCode}`);
+                    console.log(`⏰ ENTER WITHIN 45 SECONDS OR VISIT: ${RENDER_EXTERNAL_URL}/pair`);
                     console.log('============================================================\n');
                 } catch (err) {
-                    console.error('Pairing code request error:', err.message);
+                    console.error('Pairing code generation error:', err.message);
                 }
-            }, 5000);
+            }, 3500);
         }
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
-            if (qr && !BOT_NUMBER) {
-                qrcode.generate(qr, { small: true });
+
+            if (qr) {
+                latestQrString = qr;
             }
+
             if (connection === 'close') {
-                botConnectionStatus = 'Reconnecting...';
+                isConnected = false;
+                isStarting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                console.log(`Connection closed (Status: ${statusCode}). Reconnecting:`, shouldReconnect);
-                if (shouldReconnect) {
-                    setTimeout(startRadioBot, 4000);
-                } else {
-                    console.log('Session logged out. Delete ./auth_info_baileys folder to re-pair.');
+                console.log(`Connection closed (Status: ${statusCode}).`);
+
+                // If not registered yet or logged out, wipe partial auth state so next pairing code doesn't fail!
+                if (!sock.authState.creds.registered || statusCode === DisconnectReason.loggedOut) {
+                    console.log('Cleaning partial pairing state so a fresh code can be generated...');
+                    clearAuthFolder();
                 }
+
+                botConnectionStatus = 'Reconnecting & refreshing code...';
+                setTimeout(() => startRadioBot(false), 5000);
             } else if (connection === 'open') {
+                isConnected = true;
+                isStarting = false;
                 latestPairingCode = 'CONNECTED ✅';
+                latestQrString = null;
                 botConnectionStatus = 'Connected & Ready 24/7 ✅';
                 console.log(`✅ WhatsApp High-Quality Radio Bot (+${BOT_NUMBER}) is Connected!`);
                 console.log(`📩 Send commands (!add, !list, !remove, !top, !play) from +${RAW_OWNER}`);
@@ -231,11 +332,10 @@ async function startRadioBot() {
                 writeStream.on('finish', async () => {
                     try {
                         if (!fs.existsSync(tempFilePath)) return;
-                        // Send as High-Quality Stereo Audio (ptt: false prevents voice-note compression!)
                         await sock.sendMessage(destinationJid, {
                             audio: fs.readFileSync(tempFilePath),
                             mimetype: 'audio/mpeg',
-                            ptt: false, // FALSE = Crystal Clear Stereo Music Player, TRUE = Muffled Voice Note
+                            ptt: false, // FALSE = Crystal Clear Stereo Music Player
                             fileName: `${nextSong.title}.mp3`,
                             contextInfo: {
                                 externalAdReply: {
@@ -253,7 +353,6 @@ async function startRadioBot() {
                         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                     }
 
-                    // If Auto-DJ mode is ON and more songs are waiting, schedule the next track automatically
                     if (autoDjEnabled && requestQueue.length > 0) {
                         if (autoDjTimer) clearTimeout(autoDjTimer);
                         const parts = (nextSong.duration || '3:30').split(':').map(Number);
@@ -286,7 +385,6 @@ async function startRadioBot() {
             const isGroup = remoteJid.endsWith('@g.us');
             const rawSender = isGroup ? (msg.key.participant || '') : remoteJid;
 
-            // Extract plain text message across all message types
             const text =
                 msg.message.conversation ||
                 msg.message.extendedTextMessage?.text ||
@@ -299,13 +397,9 @@ async function startRadioBot() {
             const cmd = args.shift().toLowerCase();
             const query = args.join(' ');
 
-            // Verify if command is from Owner (919539601481) or sent from the bot's own linked session
             const isOwner = msg.key.fromMe || rawSender.includes(RAW_OWNER) || remoteJid.includes(RAW_OWNER);
 
             try {
-                // ----------------------------------------------------------------
-                // COMMAND: !bind (Run inside the Group to link it to your DM queue)
-                // ----------------------------------------------------------------
                 if (cmd === '!bind' && isGroup && isOwner) {
                     targetGroupJid = remoteJid;
                     await sock.sendMessage(remoteJid, {
@@ -314,12 +408,8 @@ async function startRadioBot() {
                     return;
                 }
 
-                // ----------------------------------------------------------------
-                // PERSONAL DM QUEUE MANAGEMENT COMMANDS (Only 9539601481 can edit)
-                // ----------------------------------------------------------------
                 if (!isOwner) return;
 
-                // 1. Add a song to the request list: !add <song name>
                 if (cmd === '!add') {
                     if (!query) {
                         await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>`' });
@@ -349,8 +439,6 @@ async function startRadioBot() {
                         text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately to the group._`
                     });
                 }
-
-                // 2. View the personal request list: !list
                 else if (cmd === '!list' || cmd === '!queue') {
                     if (requestQueue.length === 0) {
                         await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' });
@@ -365,8 +453,6 @@ async function startRadioBot() {
                         text: `📻 *Your Personal Request List (+${RAW_OWNER}):*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song to group now)`
                     });
                 }
-
-                // 3. Remove a song from the list: !remove <number>
                 else if (cmd === '!remove') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index < 0 || index >= requestQueue.length) {
@@ -376,8 +462,6 @@ async function startRadioBot() {
                     const removed = requestQueue.splice(index, 1)[0];
                     await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` });
                 }
-
-                // 4. Move a song to the top (#1) of the queue: !top <number>
                 else if (cmd === '!top') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
@@ -388,16 +472,12 @@ async function startRadioBot() {
                     requestQueue.unshift(promoted);
                     await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` });
                 }
-
-                // 5. Toggle Continuous Auto-DJ Radio Mode: !autodj
                 else if (cmd === '!autodj') {
                     autoDjEnabled = !autoDjEnabled;
                     await sock.sendMessage(remoteJid, {
                         text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
                     });
                 }
-
-                // 6. Play / Broadcast next song in High Quality to the Group: !play
                 else if (cmd === '!play' || cmd === '!playnext') {
                     await broadcastNextSong(remoteJid);
                 }
@@ -407,12 +487,12 @@ async function startRadioBot() {
             }
         });
     } catch (initErr) {
+        isStarting = false;
         console.error('Bot initialization error, retrying in 5s:', initErr.message);
-        setTimeout(startRadioBot, 5000);
+        setTimeout(() => startRadioBot(false), 5000);
     }
 }
 
-// Prevent unexpected errors from stopping the 24/7 cloud server
 process.on('uncaughtException', (err) => {
     console.error('Caught exception (Server kept alive):', err.message);
 });
@@ -420,4 +500,4 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection (Server kept alive):', reason);
 });
 
-startRadioBot();
+startRadioBot(false);
