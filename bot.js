@@ -51,8 +51,9 @@ let nowPlaying = null;
 let autoDjEnabled = true;
 let autoDjTimer = null;
 
-// Connection State
+// Connection & Anti-Race Lock State
 let activeSock = null;
+let currentSocketId = 0;
 let isConnected = false;
 let isConnecting = false;
 let authMode = 'qr'; // 'qr' or 'pair'
@@ -60,7 +61,7 @@ let pairingPhoneNumber = DEFAULT_BOT_NUMBER;
 let latestPairingCode = null;
 let latestQrDataUrl = null;
 let botConnectionStatus = 'Initializing WhatsApp Socket...';
-let pairingRequestedInCycle = false;
+let lastPairRequestTime = 0;
 
 // Safely wipe auth folder ONLY on explicit reset or LoggedOut (401)
 function clearAuthFolder() {
@@ -96,15 +97,66 @@ app.get('/status', (req, res) => {
     });
 });
 
-// Trigger 8-Digit Pairing Code Mode cleanly
+// Switch view mode WITHOUT wiping active session or triggering double-restarts
+app.get('/mode', (req, res) => {
+    if (isConnected) return res.redirect('/');
+    const targetMode = req.query.type === 'pair' ? 'pair' : 'qr';
+    authMode = targetMode;
+    if (targetMode === 'pair' && !latestPairingCode) {
+        botConnectionStatus = 'Click "Generate 8-Digit Code" below when your phone is ready.';
+    } else if (targetMode === 'qr') {
+        botConnectionStatus = latestQrDataUrl
+            ? 'Ready! Scan the QR Code on screen.'
+            : 'Waiting for QR code...';
+    }
+    res.redirect('/');
+});
+
+// Trigger 8-Digit Pairing Code Mode cleanly with 15s Anti-Double-Click Lock
+app.post('/pair', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+
+    const now = Date.now();
+    // Prevent double-clicks or browser prefetch from wiping the auth folder mid-generation!
+    if (now - lastPairRequestTime < 15000 && latestPairingCode) {
+        console.log('⏳ Ignored duplicate /pair request within 15s cooldown window to protect active code.');
+        return res.redirect('/');
+    }
+    lastPairRequestTime = now;
+
+    const customPhone = (req.body.phone || req.query.phone || DEFAULT_BOT_NUMBER).replace(/[^0-9]/g, '');
+    if (customPhone.length >= 10) {
+        pairingPhoneNumber = customPhone;
+    }
+
+    console.log(`🔄 Starting protected 8-Digit Pairing session for +${pairingPhoneNumber}...`);
+    authMode = 'pair';
+    latestPairingCode = 'GENERATING...';
+    latestQrDataUrl = null;
+    botConnectionStatus = `Generating fresh 8-digit pairing code for +${pairingPhoneNumber}...`;
+
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Also support GET /pair with the same 15s protection lock
 app.get('/pair', async (req, res) => {
     if (isConnected) return res.redirect('/');
+    const now = Date.now();
+    if (now - lastPairRequestTime < 15000 && latestPairingCode) {
+        console.log('⏳ Ignored duplicate GET /pair request within 15s cooldown window.');
+        authMode = 'pair';
+        return res.redirect('/');
+    }
+    lastPairRequestTime = now;
+
     const customPhone = (req.query.phone || DEFAULT_BOT_NUMBER).replace(/[^0-9]/g, '');
     if (customPhone.length >= 10) {
         pairingPhoneNumber = customPhone;
     }
 
-    console.log(`🔄 Switching to 8-Digit Pairing Mode for +${pairingPhoneNumber}...`);
+    console.log(`🔄 Starting protected 8-Digit Pairing session for +${pairingPhoneNumber}...`);
     authMode = 'pair';
     latestPairingCode = 'GENERATING...';
     latestQrDataUrl = null;
@@ -118,14 +170,15 @@ app.get('/pair', async (req, res) => {
 // Trigger Clean QR Code Mode
 app.get('/qr-mode', async (req, res) => {
     if (isConnected) return res.redirect('/');
-    console.log('🔄 Switching to Clean QR Code Scan Mode...');
     authMode = 'qr';
-    latestPairingCode = null;
-    latestQrDataUrl = null;
-    botConnectionStatus = 'Generating fresh QR code...';
-
-    clearAuthFolder();
-    await startRadioBot(true);
+    // Only restart if we don't already have an active QR socket
+    if (!latestQrDataUrl) {
+        console.log('🔄 Switching to Clean QR Code Scan Mode...');
+        latestPairingCode = null;
+        botConnectionStatus = 'Generating fresh QR code...';
+        clearAuthFolder();
+        await startRadioBot(true);
+    }
     res.redirect('/');
 });
 
@@ -133,6 +186,7 @@ app.get('/qr-mode', async (req, res) => {
 app.get('/reset', async (req, res) => {
     console.log('⚠️ Manual session reset requested.');
     isConnected = false;
+    lastPairRequestTime = 0;
     latestPairingCode = null;
     latestQrDataUrl = null;
     authMode = 'qr';
@@ -150,7 +204,7 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>WA RadioBot Connection Hub</title>
+        <title>WA RadioBot Connection Hub (v2.1)</title>
         <style>
             * { box-sizing: border-box; }
             body { font-family: system-ui, -apple-system, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 680px; margin: 0 auto; }
@@ -163,7 +217,7 @@ app.get('/', (req, res) => {
             .btn-secondary { background: #2a3942; color: #e9edef; }
             .btn-secondary:hover { background: #374852; }
             .btn-danger { background: #ef444422; color: #f87171; border: 1px solid #ef444455; }
-            .tabs { display: flex; gap: 10px; margin-bottom: 16px; }
+            .tabs { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
             input { background: #111b21; border: 1px solid #2a3942; color: #fff; padding: 11px 14px; border-radius: 10px; font-size: 14px; width: 220px; }
             code { background: #111b21; padding: 3px 6px; border-radius: 5px; color: #53bdeb; }
         </style>
@@ -171,7 +225,7 @@ app.get('/', (req, res) => {
     <body>
         <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                <h2 style="margin:0;">📻 WA RadioBot v2.0</h2>
+                <h2 style="margin:0;">📻 WA RadioBot v2.1 (Node 20 LTS)</h2>
                 <span class="badge" id="conn-badge">Checking...</span>
             </div>
             <p style="color:#8696a0; font-size:14px; margin-top:8px;">
@@ -186,15 +240,15 @@ app.get('/', (req, res) => {
                 <p style="font-size:14px; color:#d1d7db;">Send <code>!add Song Name</code>, <code>!list</code>, or <code>!play</code> to <strong>+${pairingPhoneNumber}</strong> from your personal WhatsApp (<strong>+${RAW_OWNER}</strong>).</p>
                 <p style="font-size:13px; color:#8696a0;">In your WhatsApp group, send <code>!bind</code> once to set that group as the radio broadcast destination.</p>
                 <div style="margin-top:20px;">
-                    <a class="btn btn-danger" href="/reset" onclick="return confirm('Disconnect current WhatsApp session?')">🔌 Disconnect / Relink Another Number</a>
+                    <a class="btn btn-danger" href="/reset">🔌 Disconnect / Relink Another Number</a>
                 </div>
             </div>
 
             <!-- UNCONNECTED LOGIN VIEW -->
             <div id="login-view">
                 <div class="tabs">
-                    <a class="btn ${authMode === 'qr' ? '' : 'btn-secondary'}" href="/qr-mode">📷 Method 1: Scan QR Code (Fastest)</a>
-                    <a class="btn ${authMode === 'pair' ? '' : 'btn-secondary'}" href="/pair?phone=${pairingPhoneNumber}">🔢 Method 2: 8-Digit Pairing Code</a>
+                    <a class="btn ${authMode === 'qr' ? '' : 'btn-secondary'}" href="/mode?type=qr">📷 Method 1: Scan QR Code (Fastest)</a>
+                    <a class="btn ${authMode === 'pair' ? '' : 'btn-secondary'}" href="/mode?type=pair">🔢 Method 2: 8-Digit Pairing Code</a>
                 </div>
 
                 <!-- QR MODE -->
@@ -211,21 +265,21 @@ app.get('/', (req, res) => {
                 <div id="pair-section" style="display:${authMode === 'pair' ? 'block' : 'none'}; background:#111b21; padding:20px; border-radius:12px;">
                     <h3 style="margin-top:0;">🔑 Link with 8-Digit Phone Code</h3>
                     <p style="font-size:13px; color:#8696a0; line-height:1.5;">
-                        1. Open WhatsApp on your bot phone &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link with phone number instead</strong>.<br>
-                        2. Type your bot number below and click <strong>Get Fresh Code</strong> while your phone screen is open:
+                        1. Open WhatsApp on <strong>+${pairingPhoneNumber}</strong> &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link with phone number instead</strong>.<br>
+                        2. Click <strong>Generate 8-Digit Code</strong> ONCE below and wait 3 seconds:
                     </p>
-                    <form action="/pair" method="GET" style="display:flex; gap:10px; flex-wrap:wrap; margin:14px 0;">
-                        <input type="text" name="phone" value="${pairingPhoneNumber}" placeholder="CountryCode+Number (e.g. 919656977828)" required />
-                        <button type="submit" class="btn">🔄 Get Fresh 8-Digit Code</button>
+                    <form action="/pair" method="POST" style="display:flex; gap:10px; flex-wrap:wrap; margin:14px 0;">
+                        <input type="text" name="phone" value="${pairingPhoneNumber}" placeholder="919656977828" required />
+                        <button type="submit" class="btn">🔄 Generate 8-Digit Code (Click Once)</button>
                     </form>
-                    <div class="code-box" id="pair-code-box">${latestPairingCode || 'WAITING...'}</div>
+                    <div class="code-box" id="pair-code-box">${latestPairingCode || 'CLICK GENERATE ABOVE'}</div>
                     <p style="font-size:12px; color:#eab308; text-align:center;">
-                        ⚠️ Important: After typing the code on your phone, wait 5-10 seconds for WhatsApp to finish syncing keys!
+                        ⚠️ Do NOT click Generate twice! After typing the code on your phone, wait 5–10 seconds for WhatsApp to finish syncing keys.
                     </p>
                 </div>
 
                 <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center;">
-                    <span style="font-size:12px; color:#8696a0;">Stuck or code expired? Wipe partial state:</span>
+                    <span style="font-size:12px; color:#8696a0;">Need a fresh socket?</span>
                     <a class="btn btn-danger" style="padding:8px 14px; font-size:12px;" href="/reset">🧹 Hard Reset Auth Folder</a>
                 </div>
             </div>
@@ -260,12 +314,12 @@ app.get('/', (req, res) => {
                             if (data.qrDataUrl) {
                                 qrContainer.innerHTML = '<div class="qr-box"><img src="' + data.qrDataUrl + '" width="260" height="260" alt="WhatsApp QR"/></div>';
                             } else {
-                                qrContainer.innerHTML = '<p style="color:#00a884; padding:30px;">⏳ Generating QR Code... (Takes 2-4 seconds)</p>';
+                                qrContainer.innerHTML = '<p style="color:#00a884; padding:30px;">⏳ Generating QR Code... (Or click Hard Reset below)</p>';
                             }
                         } else {
                             document.getElementById('qr-section').style.display = 'none';
                             document.getElementById('pair-section').style.display = 'block';
-                            document.getElementById('pair-code-box').textContent = data.pairingCode || 'GENERATING...';
+                            document.getElementById('pair-code-box').textContent = data.pairingCode || 'CLICK GENERATE ABOVE';
                         }
                     }
                 } catch (e) {}
@@ -279,7 +333,7 @@ app.get('/', (req, res) => {
 });
 
 // Backwards-compatible /qr route redirects to main unified dashboard
-app.get('/qr', (req, res) => res.redirect('/qr-mode'));
+app.get('/qr', (req, res) => res.redirect('/mode?type=qr'));
 
 // Lightweight 24/7 Wake-Up Endpoint for Cron-job.org / UptimeRobot
 app.get('/ping', (req, res) => {
@@ -301,14 +355,16 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ============================================================================
-// 2. WHATSAPP BOT CORE LOGIC (FIXED HANDSHAKE & MULTI-DEVICE AUTH)
+// 2. WHATSAPP BOT CORE LOGIC (LOCKED SOCKET INSTANCE & HANDSHAKE)
 // ============================================================================
 const logger = pino({ level: 'silent' });
 
 async function startRadioBot(forceRestart = false) {
     if (isConnecting && !forceRestart) return;
     isConnecting = true;
-    pairingRequestedInCycle = false;
+
+    const mySocketId = ++currentSocketId;
+    let pairingRequestedForThisSocket = false;
 
     try {
         // Cleanly close existing socket if restarting
@@ -338,7 +394,6 @@ async function startRadioBot(forceRestart = false) {
         const sock = makeWASocket({
             version,
             logger,
-            printQRInTerminal: authMode === 'qr',
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
@@ -359,6 +414,9 @@ async function startRadioBot(forceRestart = false) {
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
+            // Ignore events from superseded sockets
+            if (mySocketId !== currentSocketId) return;
+
             const { connection, lastDisconnect, qr } = update;
 
             // 1. Handle QR Generation OR 8-Digit Pairing Code Request
@@ -371,10 +429,11 @@ async function startRadioBot(forceRestart = false) {
                     } catch (qrErr) {
                         console.error('QR generation error:', qrErr.message);
                     }
-                } else if (authMode === 'pair' && !pairingRequestedInCycle) {
-                    pairingRequestedInCycle = true;
+                } else if (authMode === 'pair' && !pairingRequestedForThisSocket) {
+                    pairingRequestedForThisSocket = true;
                     try {
-                        await delay(1500);
+                        await delay(2000);
+                        if (mySocketId !== currentSocketId || sock.authState.creds.registered) return;
                         const cleanNum = pairingPhoneNumber.replace(/[^0-9]/g, '');
                         const code = await sock.requestPairingCode(cleanNum);
                         latestPairingCode = code?.match(/.{1,4}/g)?.join('-') || code;
@@ -384,13 +443,14 @@ async function startRadioBot(forceRestart = false) {
                         console.log('============================================================\n');
                     } catch (pairErr) {
                         console.error('Error requesting pairing code:', pairErr.message);
-                        botConnectionStatus = `Pairing error: ${pairErr.message}. Click Reset & try QR mode.`;
+                        botConnectionStatus = `Pairing wait: ${pairErr.message}. Retrying cleanly...`;
                     }
                 }
             }
 
             // 2. Handle Connection Close & Handshake Restart (515)
             if (connection === 'close') {
+                if (mySocketId !== currentSocketId) return;
                 isConnected = false;
                 isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
@@ -407,12 +467,11 @@ async function startRadioBot(forceRestart = false) {
                     setTimeout(() => startRadioBot(false), 3000);
                 } else if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
                     // CRITICAL FIX: Status 515 happens right after you scan QR or enter the 8-digit code!
-                    // NEVER delete the auth folder here! Reconnect immediately to complete login.
                     console.log('🔄 Pairing handshake succeeded (515)! Reconnecting immediately to finalize login...');
                     botConnectionStatus = 'Handshake complete! Finalizing WhatsApp login...';
                     setTimeout(() => startRadioBot(false), 1000);
                 } else {
-                    // Normal network timeout or QR refresh; preserve existing auth state
+                    // Preserve existing auth state so active pairing codes stay valid
                     botConnectionStatus = `Reconnecting to WhatsApp (Code ${statusCode || 'timeout'})...`;
                     setTimeout(() => startRadioBot(false), 4000);
                 }
@@ -420,6 +479,7 @@ async function startRadioBot(forceRestart = false) {
 
             // 3. Handle Successful Connection Open
             if (connection === 'open') {
+                if (mySocketId !== currentSocketId) return;
                 isConnected = true;
                 isConnecting = false;
                 latestPairingCode = 'CONNECTED ✅';
