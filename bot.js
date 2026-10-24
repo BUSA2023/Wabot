@@ -46,6 +46,9 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4n
 // Default GitHub Repo for syncing .mp3 files live without redeploying
 const DEFAULT_GITHUB_REPO = process.env.GITHUB_REPO || 'https://github.com/BUSA2023/Wabot';
 
+// Optional Permanent Session Backup String from Render Environment Variable (SESSION_DATA)
+const ENV_SESSION_DATA = process.env.SESSION_DATA || '';
+
 const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
 
 // In-Memory State
@@ -83,6 +86,39 @@ function clearAuthFolder() {
     }
 }
 
+// Restore creds.json from Render Environment Variable (SESSION_DATA) if container restarted
+function restoreSessionFromEnv() {
+    try {
+        if (!ENV_SESSION_DATA || ENV_SESSION_DATA.trim().length < 20) return false;
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
+        const credsPath = path.join(AUTH_DIR, 'creds.json');
+        if (!fs.existsSync(credsPath)) {
+            const decoded = Buffer.from(ENV_SESSION_DATA.trim(), 'base64').toString('utf-8');
+            JSON.parse(decoded); // Validate JSON before writing
+            fs.writeFileSync(credsPath, decoded, 'utf-8');
+            console.log('🛡️ Restored WhatsApp login session from SESSION_DATA environment variable!');
+            return true;
+        }
+    } catch (err) {
+        console.error('⚠️ Could not restore SESSION_DATA from environment:', err.message);
+    }
+    return false;
+}
+
+// Export current creds.json as a Base64 string so user can save it in Render Environment Variables
+function getSessionBackupString() {
+    try {
+        const credsPath = path.join(AUTH_DIR, 'creds.json');
+        if (fs.existsSync(credsPath)) {
+            const raw = fs.readFileSync(credsPath, 'utf-8');
+            return Buffer.from(raw, 'utf-8').toString('base64');
+        }
+    } catch (e) {}
+    return null;
+}
+
 // ============================================================================
 // 1. EXPRESS WEB DASHBOARD (UNIFIED QR + 8-DIGIT PAIRING CONTROLLER)
 // ============================================================================
@@ -101,8 +137,65 @@ app.get('/status', (req, res) => {
         botNumber: pairingPhoneNumber,
         ownerNumber: RAW_OWNER,
         queueLength: requestQueue.length,
-        nowPlaying: nowPlaying ? nowPlaying.title : null
+        nowPlaying: nowPlaying ? nowPlaying.title : null,
+        hasSessionBackup: Boolean(getSessionBackupString()),
+        usingEnvBackup: Boolean(ENV_SESSION_DATA)
     });
+});
+
+// Endpoint to get the Base64 SESSION_DATA backup string for Render Environment Variables
+app.get('/backup', (req, res) => {
+    const backupStr = getSessionBackupString();
+    if (!backupStr) {
+        return res.status(404).send('No active session found yet. Please connect your WhatsApp first, then refresh this page.');
+    }
+    res.status(200).send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Permanent Session Backup (SESSION_DATA)</title>
+        <style>
+            body { font-family: system-ui, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 680px; margin: 0 auto; }
+            .card { background: #1f2c34; border-radius: 16px; padding: 24px; border: 1px solid #2a3942; }
+            textarea { width: 100%; height: 150px; background: #111b21; color: #00a884; border: 1px solid #00a884; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 12px; margin: 12px 0; }
+            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; border: none; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2 style="margin-top:0; color:#00a884;">🛡️ Make Your Connection 100% Permanent</h2>
+            <p style="font-size:14px; color:#d1d7db; line-height:1.6;">
+                Even if Render restarts or you push new songs to GitHub, you will <strong>NEVER lose your WhatsApp connection</strong> if you save this backup key in Render:
+            </p>
+            <ol style="font-size:13px; color:#8696a0; line-height:1.7;">
+                <li>Copy the code box below.</li>
+                <li>Open your <strong>Render Dashboard</strong> &rarr; <strong>Environment</strong> tab.</li>
+                <li>Click <strong>Add Environment Variable</strong>:
+                    <br>Key: <code>SESSION_DATA</code>
+                    <br>Value: <em>(Paste the copied text below)</em>
+                </li>
+                <li>Click <strong>Save Changes</strong> on Render. Done forever!</li>
+            </ol>
+            <textarea id="backup-box" readonly>${backupStr}</textarea>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn" onclick="copyBackup()">📋 Copy SESSION_DATA Key</button>
+                <a class="btn" style="background:#2a3942; color:#fff;" href="/">⬅ Back to Dashboard</a>
+            </div>
+            <p id="copy-msg" style="color:#00a884; font-size:13px; display:none; margin-top:10px;">✅ Copied to clipboard! Now paste it into Render &rarr; Environment &rarr; SESSION_DATA.</p>
+        </div>
+        <script>
+            function copyBackup() {
+                const el = document.getElementById('backup-box');
+                el.select();
+                document.execCommand('copy');
+                document.getElementById('copy-msg').style.display = 'block';
+            }
+        </script>
+    </body>
+    </html>
+    `);
 });
 
 // Switch view mode WITHOUT wiping active session or triggering double-restarts
@@ -245,9 +338,16 @@ app.get('/', (req, res) => {
             <!-- CONNECTED VIEW -->
             <div id="connected-view" style="display:none; text-align:center; padding:10px 0;">
                 <h3 style="color:#00a884; font-size:22px; margin-bottom:8px;">✅ WhatsApp Bot is Linked & Online 24/7!</h3>
-                <p style="font-size:14px; color:#d1d7db;">Send <code>!add Song Name</code>, <code>!list</code>, or <code>!play</code> to <strong>+${pairingPhoneNumber}</strong> from your personal WhatsApp (<strong>+${RAW_OWNER}</strong>).</p>
+                <p style="font-size:14px; color:#d1d7db;">Send <code>!add Song Name</code>, <code>!skip</code>, <code>!list</code>, or <code>!play</code> to <strong>+${pairingPhoneNumber}</strong> from your personal WhatsApp (<strong>+${RAW_OWNER}</strong>).</p>
                 <p style="font-size:13px; color:#8696a0;">In your WhatsApp group, send <code>!bind</code> once to set that group as the radio broadcast destination.</p>
-                <div style="margin-top:20px;">
+                <div style="background:#111b21; border:1px solid #00a88455; padding:14px; border-radius:12px; margin:16px 0; text-align:left;">
+                    <strong style="color:#00a884; font-size:13px;">🛡️ Never Lose Connection When Updating GitHub Songs:</strong>
+                    <p style="font-size:12px; color:#8696a0; margin:6px 0 12px 0;">
+                        Save your session key into Render's <code>SESSION_DATA</code> Environment Variable so even if Render redeploys or restarts, your WhatsApp stays logged in automatically!
+                    </p>
+                    <a class="btn" style="padding:8px 14px; font-size:12px;" href="/backup">🔐 Get Permanent SESSION_DATA Key</a>
+                </div>
+                <div style="margin-top:16px;">
                     <a class="btn btn-danger" href="/reset">🔌 Disconnect / Relink Another Number</a>
                 </div>
             </div>
@@ -495,6 +595,9 @@ async function startRadioBot(forceRestart = false) {
         if (!fs.existsSync(AUTH_DIR)) {
             fs.mkdirSync(AUTH_DIR, { recursive: true });
         }
+
+        // Restore session from SESSION_DATA env variable if container was wiped by a Render redeploy
+        restoreSessionFromEnv();
 
         // Check if local folder has saved credentials so startup defaults to existing session
         const credsFile = path.join(AUTH_DIR, 'creds.json');
