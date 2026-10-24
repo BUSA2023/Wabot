@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp High-Quality Radio Bot Studio</title>
+    <title>WhatsApp High-Quality Radio Bot Studio (v2.0 Connection Fix)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
@@ -36,21 +36,21 @@
                 <div>
                     <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
                         WA RadioBot Studio
-                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">320kbps HQ Mode</span>
+                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.0 Connection Fix</span>
                     </h1>
                     <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
                 </div>
             </div>
 
             <div class="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
-                <button onclick="switchTab('simulator')" id="tab-simulator" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950 transition">
+                <button onclick="switchTab('troubleshoot')" id="tab-troubleshoot" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950 transition">
+                    <i class="fa-solid fa-plug-circle-check mr-1"></i> Connection Fix Guide
+                </button>
+                <button onclick="switchTab('simulator')" id="tab-simulator" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
                     <i class="fa-solid fa-sliders mr-1"></i> Live Simulator & Player
                 </button>
                 <button onclick="switchTab('hosting')" id="tab-hosting" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
-                    <i class="fa-solid fa-server mr-1"></i> Free 24/7 Hosting Guide
-                </button>
-                <button onclick="switchTab('architecture')" id="tab-architecture" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
-                    <i class="fa-solid fa-circle-info mr-1"></i> How Voice/Audio Works
+                    <i class="fa-solid fa-server mr-1"></i> Render Deployment
                 </button>
             </div>
         </div>
@@ -59,8 +59,56 @@
     <!-- Main Content -->
     <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
 
+        <!-- TAB 0: CONNECTION FIX DIAGNOSTIC & STEPS -->
+        <div id="view-troubleshoot" class="space-y-6">
+            <div class="bg-gradient-to-r from-emerald-950/60 via-slate-900 to-slate-900 border border-emerald-500/30 rounded-2xl p-6 shadow-xl">
+                <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+                    <div>
+                        <span class="text-xs font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
+                            Root Cause Fixed in v2.0
+                        </span>
+                        <h2 class="text-xl font-bold text-white mt-2">Why Your Bot Couldn't Connect Before (& How It's Fixed Now)</h2>
+                    </div>
+                    <a href="https://wabot-4nbu.onrender.com" target="_blank" class="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg transition">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Your Render Dashboard
+                    </a>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
+                        <div class="text-red-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Bug #1 Fixed: Status 515 Wipe</div>
+                        <p class="text-xs text-slate-300 leading-relaxed">
+                            When you scan a QR code or enter an 8-digit pairing code, WhatsApp disconnects the socket with <code>Status 515 (restartRequired)</code> to load encryption keys. Your old <code>bot.js</code> wiped <code>auth_info_baileys</code> on every close—deleting your login mid-handshake!
+                        </p>
+                    </div>
+                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
+                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Bug #2 Fixed: QR vs Pairing Clash</div>
+                        <p class="text-xs text-slate-300 leading-relaxed">
+                            Calling <code>requestPairingCode()</code> on a 3.5s timer while also trying to render a QR code corrupts the WebSocket handshake. Now you can cleanly switch between <strong>QR Mode</strong> and <strong>8-Digit Code Mode</strong> via tabs!
+                        </p>
+                    </div>
+                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
+                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-check-double mr-1"></i> Bug #3 Fixed: Local QR Renderer</div>
+                        <p class="text-xs text-slate-300 leading-relaxed">
+                            Added the official <code>qrcode</code> package to render base64 QR images directly inside your server's memory, plus live AJAX polling every 2 seconds so you never scan an expired code.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="mt-6 bg-slate-950 border border-slate-800 rounded-xl p-5">
+                    <h3 class="font-bold text-sm text-emerald-400 mb-3">🚀 How to Connect Right Now (After Updating `package.json` & `bot.js` on GitHub/Render):</h3>
+                    <ol class="text-xs text-slate-300 space-y-2.5 list-decimal list-inside">
+                        <li>Replace both <strong>package.json</strong> and <strong>bot.js</strong> in your GitHub repository with the updated files generated on the right.</li>
+                        <li>Wait 1–2 minutes for Render to finish deploying your update, then open your live Render URL.</li>
+                        <li><strong>For Method 1 (QR Scan - Recommended):</strong> Stay on the default <strong>Method 1: Scan QR Code</strong> tab. The QR code updates live on screen—scan it from <strong>+91 9656977828</strong>.</li>
+                        <li><strong>For Method 2 (8-Digit Code):</strong> Click <strong>Method 2: 8-Digit Pairing Code</strong>, verify <code>919656977828</code> is in the box, click <strong>Get Fresh 8-Digit Code</strong>, and enter it on your phone. Wait 5 seconds for the automatic 515 handshake to complete!</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 1: SIMULATOR & RADIO DASHBOARD -->
-        <div id="view-simulator" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div id="view-simulator" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6">
             
             <!-- Left Column: Personal DM Chat Simulator -->
             <div class="lg:col-span-5 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl h-[620px]">
@@ -83,10 +131,9 @@
 
                 <!-- Chat Messages Area -->
                 <div id="chat-box" class="flex-1 wa-bg p-4 overflow-y-auto space-y-3 text-sm">
-                    <!-- Welcome Bot Message -->
                     <div class="bg-[#202c33] text-slate-200 p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow border border-slate-700/40">
                         <p class="font-semibold text-emerald-400 text-xs mb-1">RadioBot (+91 9656977828)</p>
-                        <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Your numbers are now hardcoded into <code class="text-emerald-300">bot.js</code>. Message me from your personal WhatsApp to edit the group's playlist privately:</p>
+                        <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Message me from your personal WhatsApp to edit the group's playlist privately:</p>
                         <ul class="text-[11px] font-mono text-slate-300 mt-2 space-y-1 bg-slate-900/70 p-2 rounded-lg">
                             <li><span class="text-emerald-400">!add</span> [Song Name]</li>
                             <li><span class="text-emerald-400">!list</span> (View current queue)</li>
@@ -186,9 +233,7 @@
                     </form>
 
                     <!-- Queue List -->
-                    <div id="queue-list" class="space-y-2 overflow-y-auto max-h-[250px] pr-1">
-                        <!-- Populated via JS -->
-                    </div>
+                    <div id="queue-list" class="space-y-2 overflow-y-auto max-h-[250px] pr-1"></div>
                 </div>
 
             </div>
@@ -197,112 +242,18 @@
         <!-- TAB 2: FREE 24/7 HOSTING GUIDE -->
         <div id="view-hosting" class="hidden space-y-6">
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-                <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
-                    <div>
-                        <h2 class="text-xl font-bold text-white flex items-center gap-2">
-                            <i class="fa-solid fa-bolt text-emerald-400"></i>
-                            Your Pre-Configured 24/7 Free Cloud Setup
-                        </h2>
-                        <p class="text-sm text-slate-400 mt-1">
-                            Your Owner Number (<code class="text-emerald-400">919539601481</code>) and Bot Number (<code class="text-emerald-400">919656977828</code>) are already baked into <code class="text-slate-200">bot.js</code>!
-                        </p>
-                    </div>
-                    <div class="bg-slate-950 border border-emerald-500/30 rounded-xl px-4 py-2.5 text-xs space-y-1">
-                        <div>👑 <strong>Owner (You):</strong> <span class="text-emerald-400 font-mono">+91 9539601481</span></div>
-                        <div>🤖 <strong>Bot Account:</strong> <span class="text-teal-300 font-mono">+91 9656977828</span></div>
-                    </div>
-                </div>
-
-                <!-- Step-by-Step 24/7 Cloud Checklist -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-                    <!-- Step 1 -->
-                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
-                        <div>
-                            <div class="flex items-center justify-between mb-3">
-                                <span class="font-bold text-base text-white">Step 1: Upload 2 Files</span>
-                                <span class="text-[11px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-semibold">2 Mins</span>
-                            </div>
-                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                                Create a free GitHub account and upload <code class="text-emerald-400">bot.js</code> and <code class="text-emerald-400">package.json</code> into a new repository.
-                            </p>
-                        </div>
-                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
-                            <div>File 1: <span class="text-emerald-400">bot.js</span> (Fixed & Ready)</div>
-                            <div>File 2: <span class="text-emerald-400">package.json</span> (Fixed & Ready)</div>
-                        </div>
-                    </div>
-
-                    <!-- Step 2 -->
-                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
-                        <div>
-                            <div class="flex items-center justify-between mb-3">
-                                <span class="font-bold text-base text-white">Step 2: Link 9656977828</span>
-                                <span class="text-[11px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-semibold">No QR Needed</span>
-                            </div>
-                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                                Deploy on <strong>Render.com</strong> or <strong>Koyeb.com</strong> (Free Web Service). Open your live Render URL or logs to see the 8-digit code, then enter it on the phone running <strong>9656977828</strong>!
-                            </p>
-                        </div>
-                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
-                            <div>WhatsApp &rarr; <span class="text-blue-400">Linked Devices</span></div>
-                            <div>Tap: <span class="text-blue-400">Link with phone number</span></div>
-                        </div>
-                    </div>
-
-                    <!-- Step 3 -->
-                    <div class="bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
-                        <div>
-                            <div class="flex items-center justify-between mb-3">
-                                <span class="font-bold text-base text-white">Step 3: Keep Awake 24/7</span>
-                                <span class="text-[11px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-semibold">100% Free Forever</span>
-                            </div>
-                            <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                                Free cloud servers sleep after 15 mins if no one visits them. Paste your Render `/ping` link into <strong>cron-job.org</strong> or <strong>UptimeRobot.com</strong> (set to 5 minutes) so it never sleeps!
-                            </p>
-                        </div>
-                        <div class="bg-slate-900 p-3 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 space-y-1">
-                            <div>Endpoint: <span class="text-purple-400">/ping</span></div>
-                            <div>Interval: <span class="text-purple-400">Every 5 Minutes</span></div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Interactive 24/7 Ping URL Helper -->
+                <h2 class="text-xl font-bold text-white flex items-center gap-2 mb-4">
+                    <i class="fa-solid fa-bolt text-emerald-400"></i>
+                    24/7 Keep-Alive Ping Helper
+                </h2>
                 <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
                     <div class="flex-1 w-full">
-                        <label class="text-xs font-semibold text-slate-300 block mb-1">Generate Your 24/7 UptimeRobot / Cron-Job Ping URL:</label>
-                        <input id="render-url-input" oninput="updatePingUrl()" type="text" placeholder="Paste your free Render URL here (e.g. https://wa-radiobot.onrender.com)" 
+                        <label class="text-xs font-semibold text-slate-300 block mb-1">Your Live Render Ping URL for UptimeRobot / Cron-Job.org:</label>
+                        <input id="render-url-input" oninput="updatePingUrl()" type="text" value="https://wabot-4nbu.onrender.com" 
                             class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
                     </div>
                     <div class="w-full sm:w-auto bg-slate-900 border border-emerald-500/30 px-4 py-2.5 rounded-lg text-xs font-mono text-emerald-400 shrink-0">
-                        Ping URL: <span id="generated-ping-url">https://your-app.onrender.com/ping</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- TAB 3: HOW VOICE CHAT VS HQ AUDIO WORKS -->
-        <div id="view-architecture" class="hidden space-y-6">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-                <h2 class="text-xl font-bold text-white flex items-center gap-2">
-                    <i class="fa-solid fa-waveform-lines text-emerald-400"></i>
-                    Why Voice Notes Sound Bad & How Our Bot Fixes It
-                </h2>
-                <p class="text-sm text-slate-300 leading-relaxed">
-                    When people try to play music over a standard WhatsApp Voice Call or send it as a Voice Note (<code class="text-amber-400">ptt: true</code>), WhatsApp compresses the audio using a low-bitrate speech codec (Opus Mono 16kHz) meant only for human talking. That makes music sound muffled and robotic.
-                </p>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                    <div class="bg-slate-950 p-4 rounded-xl border border-emerald-500/30">
-                        <h3 class="font-bold text-emerald-400 text-sm mb-2">✅ Solution A: Uncompressed Stereo MP3 Stream</h3>
-                        <p class="text-xs text-slate-400 leading-relaxed">
-                            In the <code class="text-slate-200">bot.js</code> code I generated for you, we set <code class="text-emerald-400">mimetype: 'audio/mpeg'</code> and <code class="text-emerald-400">ptt: false</code>. This forces WhatsApp to keep the full 320kbps stereo music quality with album art and song title right inside the group chat!
-                        </p>
-                    </div>
-                    <div class="bg-slate-950 p-4 rounded-xl border border-emerald-500/30">
-                        <h3 class="font-bold text-emerald-400 text-sm mb-2">✅ Solution B: Live Group Web Radio Link</h3>
-                        <p class="text-xs text-slate-400 leading-relaxed">
-                            Want continuous radio while everyone is hanging out in the group? The bot hosts a live web radio stream (`https://your-bot.onrender.com/stream`). Anyone in the group clicks it once, and it automatically plays the songs you queue from your private DM!
-                        </p>
+                        Ping URL: <span id="generated-ping-url">https://wabot-4nbu.onrender.com/ping</span>
                     </div>
                 </div>
             </div>
@@ -311,7 +262,6 @@
     </main>
 
     <script>
-        // Initial Request Queue State
         let songQueue = [
             { id: 1, title: "Blinding Lights - The Weeknd", addedBy: "You (+91 9539601481)", duration: "3:20" },
             { id: 2, title: "Kesariya - Arijit Singh (HQ Stereo)", addedBy: "You (+91 9539601481)", duration: "4:28" },
@@ -323,7 +273,7 @@
         let synth = null;
 
         function switchTab(tab) {
-            ['simulator', 'hosting', 'architecture'].forEach(t => {
+            ['troubleshoot', 'simulator', 'hosting'].forEach(t => {
                 document.getElementById('view-' + t).classList.add('hidden');
                 const btn = document.getElementById('tab-' + t);
                 btn.classList.remove('bg-emerald-500', 'text-slate-950');
@@ -389,44 +339,34 @@
         function processBotCommand(rawText) {
             const text = rawText.trim();
             appendChatMessage("You (+91 9539601481)", text, true);
-
             const lower = text.toLowerCase();
 
             setTimeout(() => {
                 if (lower.startsWith('!add ')) {
                     const songTitle = text.substring(5).trim();
-                    if (!songTitle) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Please provide a song name, e.g. `!add Shape of You`");
-                        return;
-                    }
+                    if (!songTitle) return;
                     songQueue.push({ id: Date.now(), title: songTitle, addedBy: "You (+91 9539601481)", duration: "3:45" });
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `✅ Added to Group Radio Queue (#${songQueue.length}):\n🎵 *${songTitle}* (High-Quality Stereo)`);
                 } 
                 else if (lower === '!list' || lower === '!queue') {
                     if (songQueue.length === 0) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty. Add songs with `!add [song name]`.");
+                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty.");
                     } else {
                         const formatted = songQueue.map((s, i) => `${i + 1}. 🎵 ${s.title}`).join('\n');
-                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}\n\n_Reply !remove [number] or !top [number] to edit._`);
+                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}`);
                     }
                 }
                 else if (lower.startsWith('!remove ')) {
                     const idx = parseInt(text.substring(8).trim(), 10) - 1;
-                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Invalid song number. Type `!list` to check numbers.");
-                        return;
-                    }
+                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) return;
                     const removed = songQueue.splice(idx, 1)[0];
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `🗑️ Removed *${removed.title}* from the request list.`);
                 }
                 else if (lower.startsWith('!top ')) {
                     const idx = parseInt(text.substring(5).trim(), 10) - 1;
-                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Provide a valid song number (2 or higher) to move to #1.");
-                        return;
-                    }
+                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) return;
                     const item = songQueue.splice(idx, 1)[0];
                     songQueue.unshift(item);
                     renderQueue();
@@ -434,9 +374,6 @@
                 }
                 else if (lower === '!play' || lower === '!playnext') {
                     playNextInQueue();
-                }
-                else {
-                    appendChatMessage("RadioBot (+91 9656977828)", "🤖 Commands available in your personal DM:\n• `!add [Song]`\n• `!list`\n• `!remove [Number]`\n• `!top [Number]`\n• `!play` (Broadcast next song to Group)");
                 }
             }, 250);
         }
@@ -449,9 +386,7 @@
             input.value = '';
         }
 
-        function sendQuickCmd(cmd) {
-            processBotCommand(cmd);
-        }
+        function sendQuickCmd(cmd) { processBotCommand(cmd); }
 
         function handleDirectAdd(e) {
             e.preventDefault();
@@ -461,30 +396,20 @@
             input.value = '';
         }
 
-        function removeSong(idx) {
-            processBotCommand(`!remove ${idx + 1}`);
-        }
-
-        function promoteSong(idx) {
-            processBotCommand(`!top ${idx + 1}`);
-        }
+        function removeSong(idx) { processBotCommand(`!remove ${idx + 1}`); }
+        function promoteSong(idx) { processBotCommand(`!top ${idx + 1}`); }
 
         function updatePingUrl() {
             const raw = document.getElementById('render-url-input').value.trim().replace(/\/+$/, '');
-            const out = document.getElementById('generated-ping-url');
-            out.textContent = (raw || 'https://your-app.onrender.com') + '/ping';
+            document.getElementById('generated-ping-url').textContent = (raw || 'https://wabot-4nbu.onrender.com') + '/ping';
         }
 
         function playNextInQueue() {
-            if (songQueue.length === 0) {
-                appendChatMessage("RadioBot (+91 9656977828)", "📭 Queue is empty! Add songs first using `!add [Song Name]`.");
-                return;
-            }
+            if (songQueue.length === 0) return;
             const next = songQueue.shift();
             renderQueue();
             document.getElementById('now-playing-title').textContent = next.title;
-            document.getElementById('now-playing-meta').textContent = `Broadcasting 320kbps Stereo MP3 to Group • Queued by ${next.addedBy}`;
-            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Broadcasting to Group in High-Quality Stereo:*\n🎵 ${next.title}\n📡 Bitrate: 320kbps MP3 (Uncompressed)`);
+            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Broadcasting to Group in High-Quality Stereo:*\n🎵 ${next.title}`);
         }
 
         async function toggleRadioAudio() {
@@ -495,18 +420,10 @@
             if (!isRadioPlaying) {
                 await Tone.start();
                 if (!synth) {
-                    synth = new Tone.PolySynth(Tone.Synth, {
-                        oscillator: { type: "triangle" },
-                        envelope: { attack: 0.05, decay: 0.2, sustain: 0.3, release: 0.8 }
-                    }).toDestination();
+                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
                     synth.volume.value = -8;
                 }
-                const chords = [
-                    ["C4", "E4", "G4", "B4"],
-                    ["A3", "C4", "E4", "G4"],
-                    ["F3", "A3", "C4", "E4"],
-                    ["G3", "B3", "D4", "F4"]
-                ];
+                const chords = [["C4", "E4", "G4", "B4"], ["A3", "C4", "E4", "G4"], ["F3", "A3", "C4", "E4"], ["G3", "B3", "D4", "F4"]];
                 let step = 0;
                 synthLoop = new Tone.Loop((time) => {
                     synth.triggerAttackRelease(chords[step % chords.length], "2n", time);
@@ -530,7 +447,6 @@
             }
         }
 
-        // Initialize Queue on Load
         renderQueue();
     </script>
 </body>
