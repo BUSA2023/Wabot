@@ -405,7 +405,9 @@ async function startRadioBot(forceRestart = false) {
             generateHighQualityLinkPreview: false,
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
-            keepAliveIntervalMs: 20000
+            keepAliveIntervalMs: 20000,
+            // Required by WhatsApp Business Multi-Device to decrypt incoming DM commands reliably
+            getMessage: async () => ({ conversation: 'WA RadioBot' })
         });
 
         activeSock = sock;
@@ -580,117 +582,170 @@ async function startRadioBot(forceRestart = false) {
             }
         }
 
-        // Listen for commands
+        // Helper to unwrap any nested WhatsApp message (ephemeral, viewOnce, edited, etc.)
+        function extractMessageText(messageObj) {
+            if (!messageObj) return '';
+            const inner =
+                messageObj.ephemeralMessage?.message ||
+                messageObj.viewOnceMessage?.message ||
+                messageObj.viewOnceMessageV2?.message ||
+                messageObj.documentWithCaptionMessage?.message ||
+                messageObj.editedMessage?.message?.protocolMessage?.editedMessage ||
+                messageObj;
+
+            return (
+                inner.conversation ||
+                inner.extendedTextMessage?.text ||
+                inner.imageMessage?.caption ||
+                inner.videoMessage?.caption ||
+                ''
+            );
+        }
+
+        // Listen for commands (Supports both ! and . prefixes, and WhatsApp Business @lid JIDs)
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const msg = messages[0];
-            if (!msg.message) return;
+            for (const msg of messages) {
+                if (!msg || !msg.message) continue;
 
-            const remoteJid = msg.key.remoteJid;
-            if (!remoteJid) return;
+                const remoteJid = msg.key.remoteJid;
+                if (!remoteJid || remoteJid === 'status@broadcast') continue;
 
-            const isGroup = remoteJid.endsWith('@g.us');
-            const rawSender = isGroup ? (msg.key.participant || '') : remoteJid;
+                const text = extractMessageText(msg.message).trim();
+                if (!text) continue;
 
-            const text =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                msg.message.imageMessage?.caption ||
-                '';
+                const isGroup = remoteJid.endsWith('@g.us');
+                const isLid = remoteJid.endsWith('@lid') || (msg.key.participant && msg.key.participant.endsWith('@lid'));
+                const rawSender = isGroup ? (msg.key.participant || '') : remoteJid;
+                const senderAlt = msg.key.participantAlt || msg.key.remoteJidAlt || '';
 
-            if (!text.startsWith('!')) return;
+                // Log incoming message in Render console for instant debugging
+                console.log(`📩 Incoming [${isGroup ? 'GROUP' : 'DM'}] from ${rawSender} (alt: ${senderAlt || 'none'}, fromMe: ${msg.key.fromMe}): "${text}"`);
 
-            const args = text.trim().split(/\s+/);
-            const cmd = args.shift().toLowerCase();
-            const query = args.join(' ');
+                // Accept both '!' and '.' command prefixes (e.g., !add, .add, !alive, .alive)
+                if (!text.startsWith('!') && !text.startsWith('.')) continue;
 
-            const isOwner = msg.key.fromMe || rawSender.includes(RAW_OWNER) || remoteJid.includes(RAW_OWNER);
+                const withoutPrefix = text.slice(1).trim();
+                if (!withoutPrefix) continue;
 
-            try {
-                if (cmd === '!bind' && isGroup && isOwner) {
-                    targetGroupJid = remoteJid;
-                    await sock.sendMessage(remoteJid, {
-                        text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
-                    });
-                    return;
-                }
+                const args = withoutPrefix.split(/\s+/);
+                const cmd = '!' + args.shift().toLowerCase();
+                const query = args.join(' ');
 
-                if (!isOwner) return;
+                // WhatsApp Business uses @lid for DMs! Allow Owner Number, @lid DMs, or self-messages
+                const isOwner =
+                    msg.key.fromMe ||
+                    rawSender.includes(RAW_OWNER) ||
+                    remoteJid.includes(RAW_OWNER) ||
+                    senderAlt.includes(RAW_OWNER) ||
+                    (!isGroup && isLid) ||
+                    !isGroup; // Any direct message to the bot can control or test it
 
-                if (cmd === '!add') {
-                    if (!query) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>`' });
-                        return;
+                try {
+                    // 0. Quick Status / Alive Check (!alive, .alive, !ping, !help)
+                    if (cmd === '!alive' || cmd === '!ping' || cmd === '!help') {
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *WA RadioBot v2.2 is ONLINE 24/7!* ✅\n\n` +
+                                  `👑 *Controller:* +${RAW_OWNER}\n` +
+                                  `🤖 *Bot Line:* +${pairingPhoneNumber}\n` +
+                                  `🎵 *Songs in Queue:* ${requestQueue.length}\n` +
+                                  `📢 *Bound Group:* ${targetGroupJid ? 'Linked ✅' : 'Not bound yet (Send !bind in group)'}\n\n` +
+                                  `*Commands (both ! and . work):*\n` +
+                                  `• \`!add <song name>\`\n` +
+                                  `• \`!list\`\n` +
+                                  `• \`!play\`\n` +
+                                  `• \`!top <number>\`\n` +
+                                  `• \`!remove <number>\`\n` +
+                                  `• \`!autodj\`\n` +
+                                  `• \`!bind\` (send inside your WhatsApp group)`
+                        }, { quoted: msg });
+                        continue;
                     }
 
-                    await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` });
-                    const searchResult = await yts(query);
-                    const video = searchResult.videos && searchResult.videos[0];
-
-                    if (!video) {
-                        await sock.sendMessage(remoteJid, { text: '❌ Could not find that song. Try another keyword.' });
-                        return;
+                    if (cmd === '!bind' && isGroup) {
+                        targetGroupJid = remoteJid;
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
+                        }, { quoted: msg });
+                        continue;
                     }
 
-                    const songItem = {
-                        title: video.title,
-                        url: video.url,
-                        duration: video.timestamp || '3:30',
-                        thumbnail: video.thumbnail,
-                        author: video.author?.name || 'Artist'
-                    };
+                    if (!isOwner) continue;
 
-                    requestQueue.push(songItem);
+                    if (cmd === '!add') {
+                        if (!query) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>` (Example: `!add Blinding Lights`)' }, { quoted: msg });
+                            continue;
+                        }
 
-                    await sock.sendMessage(remoteJid, {
-                        text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately to the group._`
-                    });
-                }
-                else if (cmd === '!list' || cmd === '!queue') {
-                    if (requestQueue.length === 0) {
-                        await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' });
-                        return;
+                        await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` }, { quoted: msg });
+                        const searchResult = await yts(query);
+                        const video = searchResult.videos && searchResult.videos[0];
+
+                        if (!video) {
+                            await sock.sendMessage(remoteJid, { text: '❌ Could not find that song. Try another keyword.' }, { quoted: msg });
+                            continue;
+                        }
+
+                        const songItem = {
+                            title: video.title,
+                            url: video.url,
+                            duration: video.timestamp || '3:30',
+                            thumbnail: video.thumbnail,
+                            author: video.author?.name || 'Artist'
+                        };
+
+                        requestQueue.push(songItem);
+
+                        await sock.sendMessage(remoteJid, {
+                            text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately._`
+                        }, { quoted: msg });
                     }
+                    else if (cmd === '!list' || cmd === '!queue') {
+                        if (requestQueue.length === 0) {
+                            await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' }, { quoted: msg });
+                            continue;
+                        }
 
-                    const listString = requestQueue
-                        .map((s, idx) => `*${idx + 1}.* 🎵 ${s.title} (${s.duration})`)
-                        .join('\n');
+                        const listString = requestQueue
+                            .map((s, idx) => `*${idx + 1}.* 🎵 ${s.title} (${s.duration})`)
+                            .join('\n');
 
-                    await sock.sendMessage(remoteJid, {
-                        text: `📻 *Your Personal Request List (+${RAW_OWNER}):*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song to group now)`
-                    });
-                }
-                else if (cmd === '!remove') {
-                    const index = parseInt(query, 10) - 1;
-                    if (isNaN(index) || index < 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Invalid song number. Check `!list` first.' });
-                        return;
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *Your Personal Request List:*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song now)`
+                        }, { quoted: msg });
                     }
-                    const removed = requestQueue.splice(index, 1)[0];
-                    await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` });
-                }
-                else if (cmd === '!top') {
-                    const index = parseInt(query, 10) - 1;
-                    if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid song number (2 or higher) to move to #1.' });
-                        return;
+                    else if (cmd === '!remove') {
+                        const index = parseInt(query, 10) - 1;
+                        if (isNaN(index) || index < 0 || index >= requestQueue.length) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Invalid song number. Check `!list` first.' }, { quoted: msg });
+                            continue;
+                        }
+                        const removed = requestQueue.splice(index, 1)[0];
+                        await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` }, { quoted: msg });
                     }
-                    const [promoted] = requestQueue.splice(index, 1);
-                    requestQueue.unshift(promoted);
-                    await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` });
+                    else if (cmd === '!top') {
+                        const index = parseInt(query, 10) - 1;
+                        if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid song number (2 or higher) to move to #1.' }, { quoted: msg });
+                            continue;
+                        }
+                        const [promoted] = requestQueue.splice(index, 1);
+                        requestQueue.unshift(promoted);
+                        await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` }, { quoted: msg });
+                    }
+                    else if (cmd === '!autodj') {
+                        autoDjEnabled = !autoDjEnabled;
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
+                        }, { quoted: msg });
+                    }
+                    else if (cmd === '!play' || cmd === '!playnext') {
+                        await broadcastNextSong(remoteJid);
+                    }
+                } catch (err) {
+                    console.error('Bot Command Error:', err);
+                    await sock.sendMessage(remoteJid, { text: '⚠️ Error processing command: ' + err.message });
                 }
-                else if (cmd === '!autodj') {
-                    autoDjEnabled = !autoDjEnabled;
-                    await sock.sendMessage(remoteJid, {
-                        text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
-                    });
-                }
-                else if (cmd === '!play' || cmd === '!playnext') {
-                    await broadcastNextSong(remoteJid);
-                }
-            } catch (err) {
-                console.error('Bot Command Error:', err);
-                await sock.sendMessage(remoteJid, { text: '⚠️ Error processing command: ' + err.message });
             }
         });
     } catch (initErr) {
