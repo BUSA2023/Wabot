@@ -1,471 +1,1180 @@
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp High-Quality Radio Bot Studio (v2.0 Connection Fix)</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .wa-bg {
-            background-color: #0b141a;
-            background-image: radial-gradient(#1f2c34 1px, transparent 1px);
-            background-size: 20px 20px;
-        }
-        @keyframes equalize {
-            0%, 100% { height: 6px; }
-            50% { height: 24px; }
-        }
-        .eq-bar {
-            animation: equalize 0.8s ease-in-out infinite;
-        }
-    </style>
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+/**
+ * ============================================================================
+ * WHATSAPP HIGH-QUALITY RADIO & PERSONAL QUEUE BOT (v2.0 CONNECTION FIX)
+ * ============================================================================
+ * Pre-Configured Numbers & Live Render Server:
+ * - Live URL:     https://wabot-4nbu.onrender.com
+ * - Owner Number: +91 9539601481 (Controls Queue via DM)
+ * - Bot Number:   +91 9656977828 (QR & 8-Digit Pairing Login)
+ * ============================================================================
+ */
 
-    <!-- Top Navigation -->
-    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
-            <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-bold text-xl shadow-lg shadow-emerald-500/20">
-                    <i class="fa-brands fa-whatsapp"></i>
-                </div>
-                <div>
-                    <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
-                        WA RadioBot Studio
-                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.3 GitHub MP3 + Anti-Drop</span>
-                    </h1>
-                    <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
-                </div>
-            </div>
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    Browsers,
+    delay
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const express = require('express');
+const QRCode = require('qrcode');
+const yts = require('yt-search');
+const ytdl = require('@distube/ytdl-core');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const http = require('http');
 
-            <div class="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
-                <button onclick="switchTab('troubleshoot')" id="tab-troubleshoot" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950 transition">
-                    <i class="fa-solid fa-plug-circle-check mr-1"></i> Connection Fix Guide
-                </button>
-                <button onclick="switchTab('simulator')" id="tab-simulator" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
-                    <i class="fa-solid fa-sliders mr-1"></i> Live Simulator & Player
-                </button>
-                <button onclick="switchTab('hosting')" id="tab-hosting" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white transition">
-                    <i class="fa-solid fa-server mr-1"></i> Render Deployment
-                </button>
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+const PORT = process.env.PORT || 10000;
+
+// Your Personal WhatsApp Number (Controls the Queue Privately via DM)
+const RAW_OWNER = (process.env.OWNER_NUMBER || '919539601481').replace(/[^0-9]/g, '');
+const OWNER_NUMBER = RAW_OWNER + '@s.whatsapp.net';
+
+// Your Bot WhatsApp Number (Used for 8-Digit Cloud Pairing Code Login)
+const DEFAULT_BOT_NUMBER = (process.env.BOT_NUMBER || '919656977828').replace(/[^0-9]/g, '');
+
+// Your Live Render URL for automatic 24/7 self-pinging
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4nbu.onrender.com';
+
+// Default GitHub Repo for syncing .mp3 files live without redeploying
+const DEFAULT_GITHUB_REPO = process.env.GITHUB_REPO || 'https://github.com/BUSA2023/Wabot';
+
+// Optional Permanent Session Backup String from Render Environment Variable (SESSION_DATA)
+const ENV_SESSION_DATA = process.env.SESSION_DATA || '';
+
+const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
+
+// In-Memory State
+let requestQueue = [];
+let targetGroupJid = null;
+let nowPlaying = null;
+let autoDjEnabled = true;
+let autoDjTimer = null;
+let wsKeepAliveInterval = null;
+let lastPlayedAudioKey = null;
+let lastPlayedJid = null;
+let currentDownloadAbort = null;
+
+// Connection & Anti-Race Lock State
+let activeSock = null;
+let currentSocketId = 0;
+let isConnected = false;
+let isConnecting = false;
+let authMode = 'qr'; // 'qr' or 'pair'
+let pairingPhoneNumber = DEFAULT_BOT_NUMBER;
+let latestPairingCode = null;
+let latestQrDataUrl = null;
+let botConnectionStatus = 'Initializing WhatsApp Socket...';
+let lastPairRequestTime = 0;
+
+// Safely wipe auth folder ONLY on explicit reset or LoggedOut (401)
+function clearAuthFolder() {
+    try {
+        if (fs.existsSync(AUTH_DIR)) {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            console.log('🧹 Cleared old auth_info_baileys session folder.');
+        }
+    } catch (e) {
+        console.error('Could not clear auth folder:', e.message);
+    }
+}
+
+// Restore creds.json from Render Environment Variable (SESSION_DATA) if container restarted
+function restoreSessionFromEnv() {
+    try {
+        if (!ENV_SESSION_DATA || ENV_SESSION_DATA.trim().length < 20) return false;
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
+        const credsPath = path.join(AUTH_DIR, 'creds.json');
+        if (!fs.existsSync(credsPath)) {
+            const decoded = Buffer.from(ENV_SESSION_DATA.trim(), 'base64').toString('utf-8');
+            JSON.parse(decoded); // Validate JSON before writing
+            fs.writeFileSync(credsPath, decoded, 'utf-8');
+            console.log('🛡️ Restored WhatsApp login session from SESSION_DATA environment variable!');
+            return true;
+        }
+    } catch (err) {
+        console.error('⚠️ Could not restore SESSION_DATA from environment:', err.message);
+    }
+    return false;
+}
+
+// Export current creds.json as a Base64 string so user can save it in Render Environment Variables
+function getSessionBackupString() {
+    try {
+        const credsPath = path.join(AUTH_DIR, 'creds.json');
+        if (fs.existsSync(credsPath)) {
+            const raw = fs.readFileSync(credsPath, 'utf-8');
+            return Buffer.from(raw, 'utf-8').toString('base64');
+        }
+    } catch (e) {}
+    return null;
+}
+
+// ============================================================================
+// 1. EXPRESS WEB DASHBOARD (UNIFIED QR + 8-DIGIT PAIRING CONTROLLER)
+// ============================================================================
+const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Live JSON status endpoint for auto-updating frontend
+app.get('/status', (req, res) => {
+    res.json({
+        isConnected,
+        authMode,
+        status: botConnectionStatus,
+        pairingCode: latestPairingCode,
+        qrDataUrl: latestQrDataUrl,
+        botNumber: pairingPhoneNumber,
+        ownerNumber: RAW_OWNER,
+        queueLength: requestQueue.length,
+        nowPlaying: nowPlaying ? nowPlaying.title : null,
+        hasSessionBackup: Boolean(getSessionBackupString()),
+        usingEnvBackup: Boolean(ENV_SESSION_DATA)
+    });
+});
+
+// Endpoint to get the Base64 SESSION_DATA backup string for Render Environment Variables
+app.get('/backup', (req, res) => {
+    const backupStr = getSessionBackupString();
+    if (!backupStr) {
+        return res.status(404).send('No active session found yet. Please connect your WhatsApp first, then refresh this page.');
+    }
+    res.status(200).send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Permanent Session Backup (SESSION_DATA)</title>
+        <style>
+            body { font-family: system-ui, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 680px; margin: 0 auto; }
+            .card { background: #1f2c34; border-radius: 16px; padding: 24px; border: 1px solid #2a3942; }
+            textarea { width: 100%; height: 150px; background: #111b21; color: #00a884; border: 1px solid #00a884; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 12px; margin: 12px 0; }
+            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; border: none; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2 style="margin-top:0; color:#00a884;">🛡️ Make Your Connection 100% Permanent</h2>
+            <p style="font-size:14px; color:#d1d7db; line-height:1.6;">
+                Even if Render restarts or you push new songs to GitHub, you will <strong>NEVER lose your WhatsApp connection</strong> if you save this backup key in Render:
+            </p>
+            <ol style="font-size:13px; color:#8696a0; line-height:1.7;">
+                <li>Copy the code box below.</li>
+                <li>Open your <strong>Render Dashboard</strong> &rarr; <strong>Environment</strong> tab.</li>
+                <li>Click <strong>Add Environment Variable</strong>:
+                    <br>Key: <code>SESSION_DATA</code>
+                    <br>Value: <em>(Paste the copied text below)</em>
+                </li>
+                <li>Click <strong>Save Changes</strong> on Render. Done forever!</li>
+            </ol>
+            <textarea id="backup-box" readonly>${backupStr}</textarea>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                <button class="btn" onclick="copyBackup()">📋 Copy SESSION_DATA Key</button>
+                <a class="btn" style="background:#2a3942; color:#fff;" href="/">⬅ Back to Dashboard</a>
             </div>
+            <p id="copy-msg" style="color:#00a884; font-size:13px; display:none; margin-top:10px;">✅ Copied to clipboard! Now paste it into Render &rarr; Environment &rarr; SESSION_DATA.</p>
         </div>
-    </header>
+        <script>
+            function copyBackup() {
+                const el = document.getElementById('backup-box');
+                el.select();
+                document.execCommand('copy');
+                document.getElementById('copy-msg').style.display = 'block';
+            }
+        </script>
+    </body>
+    </html>
+    `);
+});
 
-    <!-- Main Content -->
-    <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
+// Switch view mode WITHOUT wiping active session or triggering double-restarts
+app.get('/mode', (req, res) => {
+    if (isConnected) return res.redirect('/');
+    const targetMode = req.query.type === 'pair' ? 'pair' : 'qr';
+    authMode = targetMode;
+    if (targetMode === 'pair' && !latestPairingCode) {
+        botConnectionStatus = 'Click "Generate 8-Digit Code" below when your phone is ready.';
+    } else if (targetMode === 'qr') {
+        botConnectionStatus = latestQrDataUrl
+            ? 'Ready! Scan the QR Code on screen.'
+            : 'Waiting for QR code...';
+    }
+    res.redirect('/');
+});
 
-        <!-- TAB 0: CONNECTION FIX DIAGNOSTIC & STEPS -->
-        <div id="view-troubleshoot" class="space-y-6">
-            <div class="bg-gradient-to-r from-emerald-950/60 via-slate-900 to-slate-900 border border-emerald-500/30 rounded-2xl p-6 shadow-xl">
-                <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
-                    <div>
-                        <span class="text-xs font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
-                            Root Cause Fixed in v2.0
-                        </span>
-                        <h2 class="text-xl font-bold text-white mt-2">Why Your Bot Couldn't Connect Before (& How It's Fixed Now)</h2>
-                    </div>
-                    <a href="https://wabot-4nbu.onrender.com" target="_blank" class="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg transition">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Your Render Dashboard
-                    </a>
+// Trigger 8-Digit Pairing Code Mode cleanly with 15s Anti-Double-Click Lock
+app.post('/pair', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+
+    const now = Date.now();
+    // Prevent double-clicks or browser prefetch from wiping the auth folder mid-generation!
+    if (now - lastPairRequestTime < 15000 && latestPairingCode) {
+        console.log('⏳ Ignored duplicate /pair request within 15s cooldown window to protect active code.');
+        return res.redirect('/');
+    }
+    lastPairRequestTime = now;
+
+    const customPhone = (req.body.phone || req.query.phone || DEFAULT_BOT_NUMBER).replace(/[^0-9]/g, '');
+    if (customPhone.length >= 10) {
+        pairingPhoneNumber = customPhone;
+    }
+
+    console.log(`🔄 Starting protected 8-Digit Pairing session for +${pairingPhoneNumber}...`);
+    authMode = 'pair';
+    latestPairingCode = 'GENERATING...';
+    latestQrDataUrl = null;
+    botConnectionStatus = `Generating fresh 8-digit pairing code for +${pairingPhoneNumber}...`;
+
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Also support GET /pair with the same 15s protection lock
+app.get('/pair', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+    const now = Date.now();
+    if (now - lastPairRequestTime < 15000 && latestPairingCode) {
+        console.log('⏳ Ignored duplicate GET /pair request within 15s cooldown window.');
+        authMode = 'pair';
+        return res.redirect('/');
+    }
+    lastPairRequestTime = now;
+
+    const customPhone = (req.query.phone || DEFAULT_BOT_NUMBER).replace(/[^0-9]/g, '');
+    if (customPhone.length >= 10) {
+        pairingPhoneNumber = customPhone;
+    }
+
+    console.log(`🔄 Starting protected 8-Digit Pairing session for +${pairingPhoneNumber}...`);
+    authMode = 'pair';
+    latestPairingCode = 'GENERATING...';
+    latestQrDataUrl = null;
+    botConnectionStatus = `Generating fresh 8-digit pairing code for +${pairingPhoneNumber}...`;
+
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Trigger Clean QR Code Mode
+app.get('/qr-mode', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+    authMode = 'qr';
+    // Only restart if we don't already have an active QR socket
+    if (!latestQrDataUrl) {
+        console.log('🔄 Switching to Clean QR Code Scan Mode...');
+        latestPairingCode = null;
+        botConnectionStatus = 'Generating fresh QR code...';
+        clearAuthFolder();
+        await startRadioBot(true);
+    }
+    res.redirect('/');
+});
+
+// Full Session Reset Button
+app.get('/reset', async (req, res) => {
+    console.log('⚠️ Manual session reset requested.');
+    isConnected = false;
+    lastPairRequestTime = 0;
+    latestPairingCode = null;
+    latestQrDataUrl = null;
+    authMode = 'qr';
+    botConnectionStatus = 'Session wiped. Restarting socket...';
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Main Live Pairing & Status Dashboard
+app.get('/', (req, res) => {
+    res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>WA RadioBot Connection Hub (v2.1)</title>
+        <style>
+            * { box-sizing: border-box; }
+            body { font-family: system-ui, -apple-system, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 680px; margin: 0 auto; }
+            .card { background: #1f2c34; border-radius: 16px; padding: 24px; margin-bottom: 18px; border: 1px solid #2a3942; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+            .badge { display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; background: #00a88422; color: #00a884; border: 1px solid #00a88455; }
+            .code-box { font-size: 32px; font-weight: 800; letter-spacing: 5px; color: #00a884; background: #111b21; padding: 18px; border-radius: 12px; text-align: center; margin: 16px 0; border: 2px dashed #00a884; font-family: monospace; }
+            .qr-box { background: #ffffff; padding: 16px; border-radius: 16px; display: inline-block; margin: 14px auto; }
+            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px; transition: 0.2s; }
+            .btn:hover { background: #06cf9c; }
+            .btn-secondary { background: #2a3942; color: #e9edef; }
+            .btn-secondary:hover { background: #374852; }
+            .btn-danger { background: #ef444422; color: #f87171; border: 1px solid #ef444455; }
+            .tabs { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+            input { background: #111b21; border: 1px solid #2a3942; color: #fff; padding: 11px 14px; border-radius: 10px; font-size: 14px; width: 220px; }
+            code { background: #111b21; padding: 3px 6px; border-radius: 5px; color: #53bdeb; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <h2 style="margin:0;">📻 WA RadioBot v2.1 (Node 20 LTS)</h2>
+                <span class="badge" id="conn-badge">Checking...</span>
+            </div>
+            <p style="color:#8696a0; font-size:14px; margin-top:8px;">
+                <strong>Status:</strong> <span id="status-text" style="color:#00a884; font-weight:bold;">${botConnectionStatus}</span><br>
+                <strong>Owner DM Controller:</strong> +${RAW_OWNER} &bull; <strong>Target Bot Line:</strong> +<span id="bot-num">${pairingPhoneNumber}</span>
+            </p>
+            <hr style="border-color:#2a3942; margin: 18px 0;">
+
+            <!-- CONNECTED VIEW -->
+            <div id="connected-view" style="display:none; text-align:center; padding:10px 0;">
+                <h3 style="color:#00a884; font-size:22px; margin-bottom:8px;">✅ WhatsApp Bot is Linked & Online 24/7!</h3>
+                <p style="font-size:14px; color:#d1d7db;">Send <code>!add Song Name</code>, <code>!skip</code>, <code>!list</code>, or <code>!play</code> to <strong>+${pairingPhoneNumber}</strong> from your personal WhatsApp (<strong>+${RAW_OWNER}</strong>).</p>
+                <p style="font-size:13px; color:#8696a0;">In your WhatsApp group, send <code>!bind</code> once to set that group as the radio broadcast destination.</p>
+                <div style="background:#111b21; border:1px solid #00a88455; padding:14px; border-radius:12px; margin:16px 0; text-align:left;">
+                    <strong style="color:#00a884; font-size:13px;">🛡️ Never Lose Connection When Updating GitHub Songs:</strong>
+                    <p style="font-size:12px; color:#8696a0; margin:6px 0 12px 0;">
+                        Save your session key into Render's <code>SESSION_DATA</code> Environment Variable so even if Render redeploys or restarts, your WhatsApp stays logged in automatically!
+                    </p>
+                    <a class="btn" style="padding:8px 14px; font-size:12px;" href="/backup">🔐 Get Permanent SESSION_DATA Key</a>
                 </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                    <div class="bg-slate-950/90 border border-emerald-500/40 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-brands fa-github mr-1"></i> New v2.3: GitHub `.mp3` & Repo Sync</div>
-                        <p class="text-xs text-slate-300 leading-relaxed">
-                            Send <code>!add https://github.com/.../song.mp3</code> for single tracks, or <code>!repo https://github.com/BUSA2023/Wabot</code> (or <code>!sync</code>) to load all <code>.mp3</code> files from a GitHub repo live!
-                        </p>
-                    </div>
-                    <div class="bg-slate-950/90 border border-amber-500/40 p-4 rounded-xl">
-                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-shield-heart mr-1"></i> Why Connection Dropped & Urgent Fix</div>
-                        <p class="text-xs text-slate-300 leading-relaxed">
-                            1) Render sleeps after 15m unless pinged <strong>externally</strong> (use Cron-Job.org on <code>/ping</code>).<br>
-                            2) Pushing MP3s to the <em>same</em> GitHub repo triggers a Render redeploy which wipes your login! Disable "Auto-Deploy" on Render or keep MP3s in a separate repo.
-                        </p>
-                    </div>
-                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-heart-pulse mr-1"></i> 20s Socket Heartbeat Added</div>
-                        <p class="text-xs text-slate-300 leading-relaxed">
-                            Added a 20-second Baileys WebSocket ping + 45-second active presence heartbeat and automatic session recovery on codes <code>408/516</code> so temporary network drops reconnect in 2.5s without losing your session.
-                        </p>
-                    </div>
-                </div>
-
-                <div class="mt-6 bg-slate-950 border border-slate-800 rounded-xl p-5">
-                    <h3 class="font-bold text-sm text-emerald-400 mb-3">🛡️ 2 Mandatory Steps So Your Connection NEVER Drops Again:</h3>
-                    <ol class="text-xs text-slate-300 space-y-2.5 list-decimal list-inside">
-                        <li><strong>Add External Ping (Takes 1 Min):</strong> Go to <a href="https://cron-job.org" target="_blank" class="text-emerald-400 underline">cron-job.org</a> (free), create a cronjob for <code>https://wabot-4nbu.onrender.com/ping</code> set to <strong>Every 5 minutes</strong>. This prevents Render from putting your bot to sleep and wiping the disk.</li>
-                        <li><strong>Prevent GitHub Song Uploads From Restarting Render:</strong> In your Render Dashboard &rarr; <strong>Settings</strong> &rarr; <strong>Build & Deploy</strong> &rarr; set <strong>Auto-Deploy</strong> to <code>No</code> (after deploying this v2.3 `bot.js`). Now you can upload `.mp3` songs to GitHub anytime and type <code>!sync</code> or <code>!repo &lt;github-link&gt;</code> in WhatsApp without Render restarting and disconnecting your bot!</li>
-                    </ol>
+                <div style="margin-top:16px;">
+                    <a class="btn btn-danger" href="/reset">🔌 Disconnect / Relink Another Number</a>
                 </div>
             </div>
-        </div>
 
-        <!-- TAB 1: SIMULATOR & RADIO DASHBOARD -->
-        <div id="view-simulator" class="hidden grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
-            <!-- Left Column: Personal DM Chat Simulator -->
-            <div class="lg:col-span-5 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl h-[620px]">
-                <!-- WhatsApp Header -->
-                <div class="bg-[#202c33] px-4 py-3 flex items-center justify-between border-b border-slate-700/60">
-                    <div class="flex items-center gap-3">
-                        <div class="relative">
-                            <div class="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white font-bold">
-                                <i class="fa-solid fa-radio"></i>
-                            </div>
-                            <span class="w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#202c33] absolute bottom-0 right-0"></span>
-                        </div>
-                        <div>
-                            <h2 class="font-semibold text-sm text-slate-100">RadioBot (+91 9656977828)</h2>
-                            <p class="text-[11px] text-emerald-400">Admin DM (+91 9539601481) • Exclusive Queue Control</p>
-                        </div>
-                    </div>
-                    <span class="text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded-lg border border-slate-700">Owner Locked</span>
+            <!-- UNCONNECTED LOGIN VIEW -->
+            <div id="login-view">
+                <div class="tabs">
+                    <a class="btn ${authMode === 'qr' ? '' : 'btn-secondary'}" href="/mode?type=qr">📷 Method 1: Scan QR Code (Fastest)</a>
+                    <a class="btn ${authMode === 'pair' ? '' : 'btn-secondary'}" href="/mode?type=pair">🔢 Method 2: 8-Digit Pairing Code</a>
                 </div>
 
-                <!-- Chat Messages Area -->
-                <div id="chat-box" class="flex-1 wa-bg p-4 overflow-y-auto space-y-3 text-sm">
-                    <div class="bg-[#202c33] text-slate-200 p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow border border-slate-700/40">
-                        <p class="font-semibold text-emerald-400 text-xs mb-1">RadioBot (+91 9656977828)</p>
-                        <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Message me from your personal WhatsApp to edit the group's playlist privately:</p>
-                        <ul class="text-[11px] font-mono text-slate-300 mt-2 space-y-1 bg-slate-900/70 p-2 rounded-lg">
-                            <li><span class="text-emerald-400">!add</span> [Song Name or .mp3 URL]</li>
-                            <li><span class="text-emerald-400">!sync</span> / <span class="text-emerald-400">!repo</span> (Load GitHub MP3s)</li>
-                            <li><span class="text-emerald-400">!list</span> (View current queue)</li>
-                            <li><span class="text-emerald-400">!skip</span> or <span class="text-emerald-400">!next</span> (Skip playing song)</li>
-                            <li><span class="text-emerald-400">!stop</span> (Stop & delete playing song)</li>
-                            <li><span class="text-emerald-400">!remove</span> [Number] / <span class="text-emerald-400">!top</span> [Number]</li>
-                            <li><span class="text-emerald-400">!play</span> (Send HQ track to Group)</li>
-                        </ul>
+                <!-- QR MODE -->
+                <div id="qr-section" style="display:${authMode === 'qr' ? 'block' : 'none'}; text-align:center; background:#111b21; padding:20px; border-radius:12px;">
+                    <h3 style="margin-top:0;">📷 Scan Instant QR Code</h3>
+                    <p style="font-size:13px; color:#8696a0;">Open WhatsApp on <strong>+${pairingPhoneNumber}</strong> &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link a Device</strong></p>
+                    <div id="qr-container">
+                        <p style="color:#00a884; padding:30px;">⏳ Waiting for fresh QR code from WhatsApp...</p>
                     </div>
+                    <p style="font-size:12px; color:#8696a0;">QR refreshes automatically on this page without reloading!</p>
                 </div>
 
-                <!-- Quick Command Chips -->
-                <div class="bg-[#182229] px-3 py-2 flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 text-xs">
-                    <button onclick="sendQuickCmd('!list')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-full whitespace-nowrap border border-slate-700">!list</button>
-                    <button onclick="sendQuickCmd('!skip')" class="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full whitespace-nowrap border border-amber-500/30">⏭️ !skip</button>
-                    <button onclick="sendQuickCmd('!stop')" class="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full whitespace-nowrap border border-red-500/30">⏹️ !stop</button>
-                    <button onclick="sendQuickCmd('!add Blinding Lights - The Weeknd')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Blinding Lights</button>
-                    <button onclick="sendQuickCmd('!play')" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 rounded-full whitespace-nowrap border border-emerald-500/30">▶ !play</button>
-                </div>
-
-                <!-- Input Bar -->
-                <form onsubmit="handleChatSubmit(event)" class="bg-[#202c33] p-3 flex items-center gap-2">
-                    <input id="chat-input" type="text" placeholder="Type !add Song Name, !remove 2, !list..." 
-                        class="flex-1 bg-[#2a3942] text-slate-100 placeholder-slate-400 text-sm px-4 py-2.5 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500">
-                    <button type="submit" class="w-10 h-10 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center font-bold transition">
-                        <i class="fa-solid fa-paper-plane"></i>
-                    </button>
-                </form>
-            </div>
-
-            <!-- Right Column: Live Group Radio Player & Visual Queue Editor -->
-            <div class="lg:col-span-7 flex flex-col gap-6">
-                
-                <!-- Group Live Radio Stream Card -->
-                <div class="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-800 rounded-2xl p-5 shadow-xl">
-                    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-                        <div class="flex items-center gap-2">
-                            <span class="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping"></span>
-                            <span class="text-xs font-bold uppercase tracking-wider text-emerald-400">Live Group Radio Broadcast</span>
-                        </div>
-                        <span class="text-xs text-slate-400 bg-slate-800/90 px-3 py-1 rounded-full border border-slate-700">
-                            <i class="fa-solid fa-users text-emerald-400 mr-1"></i> Connected to: <strong>Friends Hangout Group</strong>
-                        </span>
-                    </div>
-
-                    <div class="flex flex-col sm:flex-row items-center gap-5 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
-                        <div class="w-20 h-20 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 text-3xl shadow-lg relative overflow-hidden shrink-0">
-                            <i class="fa-solid fa-compact-disc animate-spin" style="animation-duration: 5s;"></i>
-                        </div>
-                        <div class="flex-1 text-center sm:text-left">
-                            <p class="text-xs text-emerald-400 font-semibold uppercase tracking-wide">Now Playing in Group (320kbps AAC/MP3)</p>
-                            <h3 id="now-playing-title" class="text-xl font-bold text-white mt-0.5">Starboy - The Weeknd (HQ Radio Mix)</h3>
-                            <p id="now-playing-meta" class="text-xs text-slate-400 mt-1">Requested via Personal DM (+91 9539601481) • Crystal Clear Audio Stream</p>
-                            
-                            <!-- Synth Audio Preview Controls -->
-                            <div class="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-3">
-                                <button onclick="toggleRadioAudio()" id="radio-play-btn" class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs flex items-center gap-2 transition">
-                                    <i class="fa-solid fa-play" id="radio-play-icon"></i>
-                                    <span id="radio-play-text">Test HQ Radio Synth Stream</span>
-                                </button>
-                                <button onclick="sendQuickCmd('!skip')" class="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs flex items-center gap-1.5 border border-amber-500/30 transition">
-                                    <i class="fa-solid fa-forward-step"></i> !skip Song
-                                </button>
-                                <!-- Equalizer Bars -->
-                                <div id="eq-container" class="hidden items-end gap-1 h-6 px-2">
-                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.1s"></div>
-                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.3s"></div>
-                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.2s"></div>
-                                    <div class="w-1 bg-emerald-400 rounded eq-bar" style="animation-delay: 0.4s"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Interactive Request Queue Manager -->
-                <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex-1 flex flex-col shadow-xl">
-                    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-                        <div>
-                            <h3 class="font-bold text-base text-white flex items-center gap-2">
-                                <i class="fa-solid fa-list-ol text-emerald-400"></i>
-                                Personal Request Queue (Synced with DM)
-                            </h3>
-                            <p class="text-xs text-slate-400">Edit songs here or via your personal WhatsApp chat on the left.</p>
-                        </div>
-                        <span id="queue-count" class="text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
-                            3 Songs Queued
-                        </span>
-                    </div>
-
-                    <!-- Add Song Direct Bar -->
-                    <form onsubmit="handleDirectAdd(event)" class="flex gap-2 mb-4">
-                        <input id="direct-song-input" type="text" placeholder="Quick add song title or YouTube URL to queue..." 
-                            class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
-                        <button type="submit" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-xl transition shrink-0">
-                            <i class="fa-solid fa-plus mr-1"></i> Add to Queue
-                        </button>
+                <!-- PAIRING CODE MODE -->
+                <div id="pair-section" style="display:${authMode === 'pair' ? 'block' : 'none'}; background:#111b21; padding:20px; border-radius:12px;">
+                    <h3 style="margin-top:0;">🔑 Link with 8-Digit Phone Code</h3>
+                    <p style="font-size:13px; color:#8696a0; line-height:1.5;">
+                        1. Open WhatsApp on <strong>+${pairingPhoneNumber}</strong> &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link with phone number instead</strong>.<br>
+                        2. Click <strong>Generate 8-Digit Code</strong> ONCE below and wait 3 seconds:
+                    </p>
+                    <form action="/pair" method="POST" style="display:flex; gap:10px; flex-wrap:wrap; margin:14px 0;">
+                        <input type="text" name="phone" value="${pairingPhoneNumber}" placeholder="919656977828" required />
+                        <button type="submit" class="btn">🔄 Generate 8-Digit Code (Click Once)</button>
                     </form>
-
-                    <!-- Queue List -->
-                    <div id="queue-list" class="space-y-2 overflow-y-auto max-h-[250px] pr-1"></div>
+                    <div class="code-box" id="pair-code-box">${latestPairingCode || 'CLICK GENERATE ABOVE'}</div>
+                    <p style="font-size:12px; color:#eab308; text-align:center;">
+                        ⚠️ Do NOT click Generate twice! After typing the code on your phone, wait 5–10 seconds for WhatsApp to finish syncing keys.
+                    </p>
                 </div>
 
-            </div>
-        </div>
-
-        <!-- TAB 2: FREE 24/7 HOSTING GUIDE -->
-        <div id="view-hosting" class="hidden space-y-6">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-                <h2 class="text-xl font-bold text-white flex items-center gap-2 mb-4">
-                    <i class="fa-solid fa-bolt text-emerald-400"></i>
-                    24/7 Keep-Alive Ping Helper
-                </h2>
-                <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <div class="flex-1 w-full">
-                        <label class="text-xs font-semibold text-slate-300 block mb-1">Your Live Render Ping URL for UptimeRobot / Cron-Job.org:</label>
-                        <input id="render-url-input" oninput="updatePingUrl()" type="text" value="https://wabot-4nbu.onrender.com" 
-                            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
-                    </div>
-                    <div class="w-full sm:w-auto bg-slate-900 border border-emerald-500/30 px-4 py-2.5 rounded-lg text-xs font-mono text-emerald-400 shrink-0">
-                        Ping URL: <span id="generated-ping-url">https://wabot-4nbu.onrender.com/ping</span>
-                    </div>
+                <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:12px; color:#8696a0;">Need a fresh socket?</span>
+                    <a class="btn btn-danger" style="padding:8px 14px; font-size:12px;" href="/reset">🧹 Hard Reset Auth Folder</a>
                 </div>
             </div>
         </div>
 
-    </main>
+        <script>
+            async function pollStatus() {
+                try {
+                    const res = await fetch('/status');
+                    const data = await res.json();
+                    document.getElementById('status-text').textContent = data.status;
+                    document.getElementById('bot-num').textContent = data.botNumber;
+                    const badge = document.getElementById('conn-badge');
 
-    <script>
-        let songQueue = [
-            { id: 1, title: "Blinding Lights - The Weeknd", addedBy: "You (+91 9539601481)", duration: "3:20" },
-            { id: 2, title: "Kesariya - Arijit Singh (HQ Stereo)", addedBy: "You (+91 9539601481)", duration: "4:28" },
-            { id: 3, title: "Believer - Imagine Dragons", addedBy: "You (+91 9539601481)", duration: "3:24" }
-        ];
+                    if (data.isConnected) {
+                        badge.textContent = 'ONLINE 24/7';
+                        badge.style.background = '#00a88433';
+                        badge.style.color = '#00a884';
+                        document.getElementById('connected-view').style.display = 'block';
+                        document.getElementById('login-view').style.display = 'none';
+                    } else {
+                        badge.textContent = data.authMode === 'pair' ? 'PAIRING MODE' : 'QR SCAN MODE';
+                        badge.style.background = '#eab30822';
+                        badge.style.color = '#facc15';
+                        document.getElementById('connected-view').style.display = 'none';
+                        document.getElementById('login-view').style.display = 'block';
 
-        let isRadioPlaying = false;
-        let synthLoop = null;
-        let synth = null;
+                        if (data.authMode === 'qr') {
+                            document.getElementById('qr-section').style.display = 'block';
+                            document.getElementById('pair-section').style.display = 'none';
+                            const qrContainer = document.getElementById('qr-container');
+                            if (data.qrDataUrl) {
+                                qrContainer.innerHTML = '<div class="qr-box"><img src="' + data.qrDataUrl + '" width="260" height="260" alt="WhatsApp QR"/></div>';
+                            } else {
+                                qrContainer.innerHTML = '<p style="color:#00a884; padding:30px;">⏳ Generating QR Code... (Or click Hard Reset below)</p>';
+                            }
+                        } else {
+                            document.getElementById('qr-section').style.display = 'none';
+                            document.getElementById('pair-section').style.display = 'block';
+                            document.getElementById('pair-code-box').textContent = data.pairingCode || 'CLICK GENERATE ABOVE';
+                        }
+                    }
+                } catch (e) {}
+            }
+            setInterval(pollStatus, 2000);
+            pollStatus();
+        </script>
+    </body>
+    </html>
+    `);
+});
 
-        function switchTab(tab) {
-            ['troubleshoot', 'simulator', 'hosting'].forEach(t => {
-                document.getElementById('view-' + t).classList.add('hidden');
-                const btn = document.getElementById('tab-' + t);
-                btn.classList.remove('bg-emerald-500', 'text-slate-950');
-                btn.classList.add('text-slate-300');
+// Backwards-compatible /qr route redirects to main unified dashboard
+app.get('/qr', (req, res) => res.redirect('/mode?type=qr'));
+
+// Lightweight 24/7 Wake-Up Endpoint for Cron-job.org / UptimeRobot
+app.get('/ping', (req, res) => {
+    res.status(200).send('PONG - RadioBot Awake 24/7');
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 24/7 Keep-Alive & Radio Server running on port ${PORT}`);
+    console.log(`👑 Owner Number configured: +${RAW_OWNER}`);
+    console.log(`🤖 Bot Number configured:   +${pairingPhoneNumber}`);
+
+    if (RENDER_EXTERNAL_URL && RENDER_EXTERNAL_URL.startsWith('https://')) {
+        setInterval(() => {
+            https.get(`${RENDER_EXTERNAL_URL.replace(/\/+$/, '')}/ping`, (res) => {
+                console.log(`⚡ 24/7 Self-Ping Status: ${res.statusCode}`);
+            }).on('error', () => {});
+        }, 4 * 60 * 1000); // Every 4 minutes
+    }
+});
+
+// ============================================================================
+// GITHUB & DIRECT MP3 DOWNLOAD HELPERS
+// ============================================================================
+
+// Convert standard GitHub blob URL to raw.githubusercontent.com URL
+function normalizeGitHubMp3Url(rawUrl) {
+    let url = rawUrl.trim();
+    // Convert https://github.com/user/repo/blob/branch/path.mp3 -> https://raw.githubusercontent.com/user/repo/branch/path.mp3
+    if (url.includes('github.com') && url.includes('/blob/')) {
+        url = url
+            .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+            .replace('/blob/', '/');
+    }
+    return url;
+}
+
+// Download any direct .mp3 URL (including GitHub Raw) with redirect support
+function downloadDirectMp3(fileUrl, destPath) {
+    return new Promise((resolve, reject) => {
+        const client = fileUrl.startsWith('https') ? https : http;
+        const req = client.get(fileUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (WA-RadioBot/2.3)' }
+        }, (res) => {
+            // Follow 301/302 redirects (GitHub raw redirects)
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                return downloadDirectMp3(res.headers.location, destPath).then(resolve).catch(reject);
+            }
+            if (res.statusCode !== 200) {
+                return reject(new Error(`HTTP Status ${res.statusCode}`));
+            }
+            const fileStream = fs.createWriteStream(destPath);
+            res.pipe(fileStream);
+            fileStream.on('finish', () => {
+                fileStream.close(() => resolve(destPath));
             });
-            document.getElementById('view-' + tab).classList.remove('hidden');
-            const activeBtn = document.getElementById('tab-' + tab);
-            activeBtn.classList.add('bg-emerald-500', 'text-slate-950');
-            activeBtn.classList.remove('text-slate-300');
+            fileStream.on('error', (err) => {
+                if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                reject(err);
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(45000, () => {
+            req.destroy();
+            reject(new Error('Download timeout'));
+        });
+    });
+}
+
+// Fetch all .mp3 files from a GitHub Repository or Folder URL using GitHub API
+function fetchGitHubRepoMp3s(repoUrl) {
+    return new Promise((resolve, reject) => {
+        try {
+            // Parse https://github.com/OWNER/REPO or https://github.com/OWNER/REPO/tree/BRANCH/FOLDER
+            const cleaned = repoUrl.trim().replace(/\/+$/, '');
+            const match = cleaned.match(/github\.com\/([^/]+)\/([^/]+)(?:\/tree\/([^/]+)(?:\/(.*))?)?/i);
+            if (!match) {
+                return reject(new Error('Invalid GitHub repository URL. Example: https://github.com/BUSA2023/Wabot'));
+            }
+            const owner = match[1];
+            const repo = match[2].replace(/\.git$/i, '');
+            const branch = match[3] || '';
+            const subPath = match[4] || '';
+
+            const apiPath = `/repos/${owner}/${repo}/contents/${subPath}${branch ? `?ref=${branch}` : ''}`;
+
+            https.get({
+                hostname: 'api.github.com',
+                path: apiPath,
+                headers: {
+                    'User-Agent': 'WA-RadioBot-v2.3',
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            }, (res) => {
+                let rawData = '';
+                res.on('data', chunk => rawData += chunk);
+                res.on('end', () => {
+                    try {
+                        if (res.statusCode !== 200) {
+                            return reject(new Error(`GitHub API returned status ${res.statusCode}`));
+                        }
+                        const items = JSON.parse(rawData);
+                        const list = Array.isArray(items) ? items : [items];
+                        const mp3Files = list
+                            .filter(item => item.type === 'file' && /\.(mp3|m4a|ogg|wav)$/i.test(item.name) && item.download_url)
+                            .map(item => ({
+                                title: decodeURIComponent(item.name.replace(/\.(mp3|m4a|ogg|wav)$/i, '').replace(/[-_]/g, ' ')),
+                                url: item.download_url,
+                                duration: 'HQ Direct MP3',
+                                thumbnail: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
+                                author: `${owner}/${repo}`,
+                                isDirectMp3: true
+                            }));
+                        resolve(mp3Files);
+                    } catch (parseErr) {
+                        reject(parseErr);
+                    }
+                });
+            }).on('error', reject);
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+// ============================================================================
+// 2. WHATSAPP BOT CORE LOGIC (LOCKED SOCKET INSTANCE & ANTI-DROP HEARTBEAT)
+// ============================================================================
+const logger = pino({ level: 'silent' });
+
+async function startRadioBot(forceRestart = false) {
+    if (isConnecting && !forceRestart) return;
+    isConnecting = true;
+
+    const mySocketId = ++currentSocketId;
+    let pairingRequestedForThisSocket = false;
+
+    try {
+        // Cleanly close existing socket if restarting
+        if (wsKeepAliveInterval) {
+            clearInterval(wsKeepAliveInterval);
+            wsKeepAliveInterval = null;
+        }
+        if (activeSock) {
+            try {
+                activeSock.ev.removeAllListeners();
+                activeSock.ws.close();
+            } catch (e) {}
+            activeSock = null;
         }
 
-        function renderQueue() {
-            const listEl = document.getElementById('queue-list');
-            const countEl = document.getElementById('queue-count');
-            countEl.textContent = `${songQueue.length} Song${songQueue.length === 1 ? '' : 's'} Queued`;
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
 
-            if (songQueue.length === 0) {
-                listEl.innerHTML = `
-                    <div class="text-center py-8 text-slate-500 text-xs border border-dashed border-slate-800 rounded-xl">
-                        Queue is empty. Use <code class="text-emerald-400">!add Song Name</code> in your DM!
-                    </div>`;
+        // Restore session from SESSION_DATA env variable if container was wiped by a Render redeploy
+        restoreSessionFromEnv();
+
+        // Check if local folder has saved credentials so startup defaults to existing session
+        const credsFile = path.join(AUTH_DIR, 'creds.json');
+        const hasExistingSession = fs.existsSync(credsFile);
+
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+        // Fetch latest WhatsApp Web version with safe fallback
+        let version = [2, 3000, 1015901307];
+        try {
+            const latest = await fetchLatestBaileysVersion();
+            if (latest && latest.version) version = latest.version;
+        } catch (verErr) {
+            console.log('Using fallback WhatsApp Web version:', version);
+        }
+
+        const sock = makeWASocket({
+            version,
+            logger,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            // Official Ubuntu Chrome signature required for both QR & Pairing Code
+            browser: Browsers.ubuntu('Chrome'),
+            markOnlineOnConnect: true,
+            syncFullHistory: false,
+            generateHighQualityLinkPreview: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            // CRITICAL FIX FOR CONNECTION DROPS: Send WebSocket ping every 20s & retry fast
+            keepAliveIntervalMs: 20000,
+            retryRequestDelayMs: 1500,
+            maxMsgRetryCount: 5,
+            // Required by WhatsApp Business Multi-Device to decrypt incoming DM commands reliably
+            getMessage: async () => ({ conversation: 'WA RadioBot' })
+        });
+
+        activeSock = sock;
+
+        // CRITICAL: Always save credentials immediately whenever updated
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', async (update) => {
+            // Ignore events from superseded sockets
+            if (mySocketId !== currentSocketId) return;
+
+            const { connection, lastDisconnect, qr } = update;
+
+            // 1. Handle QR Generation OR 8-Digit Pairing Code Request
+            if (qr && !sock.authState.creds.registered) {
+                if (authMode === 'qr') {
+                    try {
+                        latestQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, width: 280 });
+                        botConnectionStatus = 'Ready! Scan the QR Code on screen.';
+                        console.log('📷 New QR Code generated and ready at /');
+                    } catch (qrErr) {
+                        console.error('QR generation error:', qrErr.message);
+                    }
+                } else if (authMode === 'pair' && !pairingRequestedForThisSocket) {
+                    pairingRequestedForThisSocket = true;
+                    try {
+                        await delay(2000);
+                        if (mySocketId !== currentSocketId || sock.authState.creds.registered) return;
+                        const cleanNum = pairingPhoneNumber.replace(/[^0-9]/g, '');
+                        const code = await sock.requestPairingCode(cleanNum);
+                        latestPairingCode = code?.match(/.{1,4}/g)?.join('-') || code;
+                        botConnectionStatus = `Enter code ${latestPairingCode} on WhatsApp (+${cleanNum})`;
+                        console.log('\n============================================================');
+                        console.log(`🔑 8-DIGIT PAIRING CODE FOR +${cleanNum}: ${latestPairingCode}`);
+                        console.log('============================================================\n');
+                    } catch (pairErr) {
+                        console.error('Error requesting pairing code:', pairErr.message);
+                        botConnectionStatus = `Pairing wait: ${pairErr.message}. Retrying cleanly...`;
+                    }
+                }
+            }
+
+            // 2. Handle Connection Close & Handshake Restart (515)
+            if (connection === 'close') {
+                if (mySocketId !== currentSocketId) return;
+                if (wsKeepAliveInterval) {
+                    clearInterval(wsKeepAliveInterval);
+                    wsKeepAliveInterval = null;
+                }
+                isConnected = false;
+                isConnecting = false;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const reason = lastDisconnect?.error?.message || 'Unknown';
+                console.log(`⚠️ Connection closed. Status: ${statusCode} (${reason})`);
+
+                if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                    // ONLY wipe auth folder when explicitly logged out from phone (401)
+                    console.log('🧹 Device logged out from phone (401). Wiping auth folder for fresh login...');
+                    clearAuthFolder();
+                    latestPairingCode = null;
+                    latestQrDataUrl = null;
+                    botConnectionStatus = 'Logged out. Ready for fresh pairing...';
+                    setTimeout(() => startRadioBot(false), 3000);
+                } else if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+                    // Status 515 happens right after you scan QR or enter the 8-digit code
+                    console.log('🔄 Pairing handshake succeeded (515)! Reconnecting immediately to finalize login...');
+                    botConnectionStatus = 'Handshake complete! Finalizing WhatsApp login...';
+                    setTimeout(() => startRadioBot(false), 1000);
+                } else if (statusCode === DisconnectReason.connectionReplaced || statusCode === 440) {
+                    // Another instance started (e.g., during Render rolling deploy) - wait 8s before reconnecting
+                    console.log('⏳ Connection replaced by newer deploy instance (440). Waiting 8s...');
+                    botConnectionStatus = 'Syncing with new deploy instance...';
+                    setTimeout(() => startRadioBot(false), 8000);
+                } else {
+                    // Network hiccup, stream error (516), or timeout (408) -> Reconnect immediately WITHOUT deleting auth folder!
+                    console.log(`🔄 Auto-reconnecting preserved session (Status ${statusCode})...`);
+                    botConnectionStatus = `Auto-reconnecting session (Code ${statusCode || 'network'})...`;
+                    setTimeout(() => startRadioBot(false), 2500);
+                }
+            }
+
+            // 3. Handle Successful Connection Open
+            if (connection === 'open') {
+                if (mySocketId !== currentSocketId) return;
+                isConnected = true;
+                isConnecting = false;
+                latestPairingCode = 'CONNECTED ✅';
+                latestQrDataUrl = null;
+                botConnectionStatus = 'Connected & Streaming 24/7 ✅';
+                console.log(`✅ WhatsApp High-Quality Radio Bot (+${pairingPhoneNumber}) is Connected!`);
+                console.log(`📩 Send commands (!add, !repo, !sync, !list, !play) from +${RAW_OWNER}`);
+
+                // Start Active WebSocket Heartbeat every 45 seconds so NAT/Render never drops the idle socket
+                if (wsKeepAliveInterval) clearInterval(wsKeepAliveInterval);
+                wsKeepAliveInterval = setInterval(async () => {
+                    if (activeSock && isConnected) {
+                        try {
+                            await activeSock.sendPresenceUpdate('available');
+                        } catch (e) {}
+                    }
+                }, 45000);
+            }
+        });
+
+        // Helper function to broadcast the next song in High Quality Stereo MP3 (Supports GitHub MP3 & YouTube)
+        async function broadcastNextSong(notifyJid, isSkip = false) {
+            // Cancel any pending Auto-DJ timer or in-flight download when skipping/playing
+            if (autoDjTimer) {
+                clearTimeout(autoDjTimer);
+                autoDjTimer = null;
+            }
+            if (currentDownloadAbort) {
+                try { currentDownloadAbort(); } catch (e) {}
+                currentDownloadAbort = null;
+            }
+
+            // If skipping, delete the previous audio message in WhatsApp so playback stops immediately
+            if (isSkip && lastPlayedAudioKey && lastPlayedJid) {
+                try {
+                    await sock.sendMessage(lastPlayedJid, { delete: lastPlayedAudioKey });
+                    lastPlayedAudioKey = null;
+                } catch (delErr) {
+                    console.log('Could not delete previous audio message on skip:', delErr.message);
+                }
+            }
+
+            const destinationJid = targetGroupJid || notifyJid;
+            if (requestQueue.length === 0) {
+                nowPlaying = null;
+                if (notifyJid) {
+                    await sock.sendMessage(notifyJid, {
+                        text: isSkip
+                            ? '⏭️ Skipped! 📭 The queue is now empty. Send `!add <song or .mp3 url>` or `!sync` to add more tracks.'
+                            : '📭 Queue finished! Send `!add <song or .mp3 url>` or `!sync` from your DM to keep the radio going.'
+                    });
+                }
                 return;
             }
 
-            listEl.innerHTML = songQueue.map((song, idx) => `
-                <div class="flex items-center justify-between bg-slate-950 border border-slate-800/90 px-3.5 py-2.5 rounded-xl hover:border-slate-700 transition">
-                    <div class="flex items-center gap-3 min-w-0">
-                        <span class="w-6 h-6 rounded-lg bg-slate-800 text-emerald-400 font-mono text-xs flex items-center justify-center font-bold shrink-0">
-                            ${idx + 1}
-                        </span>
-                        <div class="truncate">
-                            <p class="text-xs font-semibold text-slate-100 truncate">${song.title}</p>
-                            <p class="text-[10px] text-slate-400">HQ 320kbps • Edited via Personal DM (+91 9539601481)</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-1.5 shrink-0 ml-2">
-                        ${idx > 0 ? `
-                        <button onclick="promoteSong(${idx})" title="Move to #1 (!top ${idx+1})" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs flex items-center justify-center border border-slate-800">
-                            <i class="fa-solid fa-arrow-up"></i>
-                        </button>` : ''}
-                        <button onclick="removeSong(${idx})" title="Remove (!remove ${idx+1})" class="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs flex items-center justify-center border border-red-500/20">
-                            <i class="fa-solid fa-trash-can"></i>
-                        </button>
-                    </div>
-                </div>
-            `).join('');
-        }
+            const nextSong = requestQueue.shift();
+            nowPlaying = nextSong;
 
-        function appendChatMessage(sender, text, isUser = false) {
-            const box = document.getElementById('chat-box');
-            const msgDiv = document.createElement('div');
-            if (isUser) {
-                msgDiv.className = "bg-[#005c4b] text-white p-2.5 px-3.5 rounded-2xl rounded-tr-none max-w-[80%] ml-auto shadow text-xs";
-                msgDiv.textContent = text;
-            } else {
-                msgDiv.className = "bg-[#202c33] text-slate-200 p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow border border-slate-700/40 text-xs whitespace-pre-line";
-                msgDiv.innerHTML = `<p class="font-semibold text-emerald-400 text-[11px] mb-1">${sender}</p>${text}`;
+            if (notifyJid) {
+                await sock.sendMessage(notifyJid, {
+                    text: `${isSkip ? '⏭️ *Skipped to Next Track!*\n' : ''}🎧 Broadcasting *${nextSong.title}* (${nextSong.isDirectMp3 ? 'GitHub Direct MP3' : 'HQ Stereo MP3'}) to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
+                });
             }
-            box.appendChild(msgDiv);
-            box.scrollTop = box.scrollHeight;
-        }
 
-        function processBotCommand(rawText) {
-            const text = rawText.trim();
-            appendChatMessage("You (+91 9539601481)", text, true);
-            const lower = text.toLowerCase();
+            const tempFilePath = path.join(__dirname, `temp_${Date.now()}.mp3`);
+            let isAborted = false;
 
-            setTimeout(() => {
-                if (lower.startsWith('!add ')) {
-                    const songTitle = text.substring(5).trim();
-                    if (!songTitle) return;
-                    songQueue.push({ id: Date.now(), title: songTitle, addedBy: "You (+91 9539601481)", duration: "3:45" });
-                    renderQueue();
-                    appendChatMessage("RadioBot (+91 9656977828)", `✅ Added to Group Radio Queue (#${songQueue.length}):\n🎵 *${songTitle}* (High-Quality Stereo)`);
-                } 
-                else if (lower === '!list' || lower === '!queue') {
-                    if (songQueue.length === 0) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty.");
-                    } else {
-                        const formatted = songQueue.map((s, i) => `${i + 1}. 🎵 ${s.title}`).join('\n');
-                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}`);
+            currentDownloadAbort = () => {
+                isAborted = true;
+                if (fs.existsSync(tempFilePath)) {
+                    try { fs.unlinkSync(tempFilePath); } catch (e) {}
+                }
+            };
+
+            // Helper to send the downloaded tempFilePath to WhatsApp & schedule Auto-DJ
+            const sendAudioFileAndScheduleNext = async () => {
+                if (isAborted) return;
+                currentDownloadAbort = null;
+                try {
+                    if (!fs.existsSync(tempFilePath)) return;
+                    const sentMsg = await sock.sendMessage(destinationJid, {
+                        audio: fs.readFileSync(tempFilePath),
+                        mimetype: 'audio/mpeg',
+                        ptt: false, // Crystal Clear Stereo Music Player
+                        fileName: `${nextSong.title}.mp3`,
+                        contextInfo: {
+                            externalAdReply: {
+                                title: `📻 Now Playing: ${nextSong.title}`,
+                                body: `High-Quality Radio • Controlled by +${RAW_OWNER}`,
+                                mediaType: 2,
+                                thumbnailUrl: nextSong.thumbnail,
+                                sourceUrl: nextSong.url
+                            }
+                        }
+                    });
+                    if (sentMsg && sentMsg.key) {
+                        lastPlayedAudioKey = sentMsg.key;
+                        lastPlayedJid = destinationJid;
                     }
+                } catch (sendErr) {
+                    console.error('Error sending audio message:', sendErr.message);
+                } finally {
+                    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                 }
-                else if (lower.startsWith('!remove ')) {
-                    const idx = parseInt(text.substring(8).trim(), 10) - 1;
-                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) return;
-                    const removed = songQueue.splice(idx, 1)[0];
-                    renderQueue();
-                    appendChatMessage("RadioBot (+91 9656977828)", `🗑️ Removed *${removed.title}* from the request list.`);
+
+                if (autoDjEnabled && requestQueue.length > 0 && !isAborted) {
+                    if (autoDjTimer) clearTimeout(autoDjTimer);
+                    const parts = (nextSong.duration || '3:30').split(':').map(Number);
+                    const seconds = parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])
+                        ? (parts[0] * 60 + parts[1])
+                        : 210;
+                    const delayMs = Math.min(Math.max(seconds * 1000, 30000), 8 * 60 * 1000);
+                    autoDjTimer = setTimeout(() => {
+                        if (autoDjEnabled && requestQueue.length > 0) {
+                            broadcastNextSong(OWNER_NUMBER, false);
+                        }
+                    }, delayMs);
                 }
-                else if (lower.startsWith('!top ')) {
-                    const idx = parseInt(text.substring(5).trim(), 10) - 1;
-                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) return;
-                    const item = songQueue.splice(idx, 1)[0];
-                    songQueue.unshift(item);
-                    renderQueue();
-                    appendChatMessage("RadioBot (+91 9656977828)", `⬆️ Moved *${item.title}* to #1 in the queue!`);
+            };
+
+            try {
+                // CASE 1: Direct .mp3 link or GitHub Raw file
+                if (nextSong.isDirectMp3) {
+                    await downloadDirectMp3(nextSong.url, tempFilePath);
+                    await sendAudioFileAndScheduleNext();
+                    return;
                 }
-                else if (lower === '!skip' || lower === '!next') {
-                    const currentTitle = document.getElementById('now-playing-title').textContent;
-                    if (songQueue.length === 0) {
-                        document.getElementById('now-playing-title').textContent = "Nothing Playing (Queue Empty)";
-                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ Skipped *${currentTitle}* and deleted the audio message from chat!\n📭 Queue is now empty.`);
-                    } else {
-                        const next = songQueue.shift();
-                        renderQueue();
-                        document.getElementById('now-playing-title').textContent = next.title;
-                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ *Skipped ${currentTitle}!* (Removed previous audio player from chat)\n🎧 *Now Broadcasting:* 🎵 ${next.title}`);
+
+                // CASE 2: YouTube Stream
+                const audioStream = ytdl(nextSong.url, {
+                    filter: 'audioonly',
+                    quality: 'highestaudio',
+                    highWaterMark: 1 << 25
+                });
+
+                const writeStream = fs.createWriteStream(tempFilePath);
+
+                currentDownloadAbort = () => {
+                    isAborted = true;
+                    try { audioStream.destroy(); } catch (e) {}
+                    try { writeStream.destroy(); } catch (e) {}
+                    if (fs.existsSync(tempFilePath)) {
+                        try { fs.unlinkSync(tempFilePath); } catch (e) {}
                     }
+                };
+
+                audioStream.on('error', async (err) => {
+                    if (isAborted) return;
+                    console.error('Audio download error:', err.message);
+                    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                    if (notifyJid) {
+                        await sock.sendMessage(notifyJid, {
+                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Tip: Use GitHub .mp3 links (\`!add https://...song.mp3\` or \`!repo\`) for 100% reliability!`
+                        });
+                    }
+                    if (requestQueue.length > 0) {
+                        setTimeout(() => broadcastNextSong(notifyJid, false), 2000);
+                    }
+                });
+
+                writeStream.on('finish', sendAudioFileAndScheduleNext);
+                audioStream.pipe(writeStream);
+            } catch (err) {
+                if (isAborted) return;
+                console.error('Broadcast setup error:', err.message);
+                if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                if (notifyJid) {
+                    await sock.sendMessage(notifyJid, {
+                        text: `⚠️ Failed to download *${nextSong.title}*: ${err.message}`
+                    });
                 }
-                else if (lower === '!stop') {
-                    const currentTitle = document.getElementById('now-playing-title').textContent;
-                    document.getElementById('now-playing-title').textContent = "Stopped";
-                    appendChatMessage("RadioBot (+91 9656977828)", `⏹️ Stopped *${currentTitle}* and removed the audio player from the group chat.`);
-                }
-                else if (lower === '!play' || lower === '!playnext') {
-                    playNextInQueue();
-                }
-            }, 250);
-        }
-
-        function handleChatSubmit(e) {
-            e.preventDefault();
-            const input = document.getElementById('chat-input');
-            if (!input.value.trim()) return;
-            processBotCommand(input.value);
-            input.value = '';
-        }
-
-        function sendQuickCmd(cmd) { processBotCommand(cmd); }
-
-        function handleDirectAdd(e) {
-            e.preventDefault();
-            const input = document.getElementById('direct-song-input');
-            if (!input.value.trim()) return;
-            processBotCommand(`!add ${input.value.trim()}`);
-            input.value = '';
-        }
-
-        function removeSong(idx) { processBotCommand(`!remove ${idx + 1}`); }
-        function promoteSong(idx) { processBotCommand(`!top ${idx + 1}`); }
-
-        function updatePingUrl() {
-            const raw = document.getElementById('render-url-input').value.trim().replace(/\/+$/, '');
-            document.getElementById('generated-ping-url').textContent = (raw || 'https://wabot-4nbu.onrender.com') + '/ping';
-        }
-
-        function playNextInQueue() {
-            if (songQueue.length === 0) return;
-            const next = songQueue.shift();
-            renderQueue();
-            document.getElementById('now-playing-title').textContent = next.title;
-            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Broadcasting to Group in High-Quality Stereo:*\n🎵 ${next.title}`);
-        }
-
-        async function toggleRadioAudio() {
-            const btnIcon = document.getElementById('radio-play-icon');
-            const btnText = document.getElementById('radio-play-text');
-            const eq = document.getElementById('eq-container');
-
-            if (!isRadioPlaying) {
-                await Tone.start();
-                if (!synth) {
-                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
-                    synth.volume.value = -8;
-                }
-                const chords = [["C4", "E4", "G4", "B4"], ["A3", "C4", "E4", "G4"], ["F3", "A3", "C4", "E4"], ["G3", "B3", "D4", "F4"]];
-                let step = 0;
-                synthLoop = new Tone.Loop((time) => {
-                    synth.triggerAttackRelease(chords[step % chords.length], "2n", time);
-                    step++;
-                }, "2n").start(0);
-                Tone.Transport.start();
-
-                isRadioPlaying = true;
-                btnIcon.className = "fa-solid fa-pause";
-                btnText.textContent = "Pause HQ Stream";
-                eq.classList.remove('hidden');
-                eq.classList.add('flex');
-            } else {
-                if (synthLoop) synthLoop.stop();
-                Tone.Transport.stop();
-                isRadioPlaying = false;
-                btnIcon.className = "fa-solid fa-play";
-                btnText.textContent = "Test HQ Radio Synth Stream";
-                eq.classList.add('hidden');
-                eq.classList.remove('flex');
             }
         }
 
-        renderQueue();
-    </script>
-</body>
-</html>
+        // Helper to unwrap any nested WhatsApp message (ephemeral, viewOnce, edited, etc.)
+        function extractMessageText(messageObj) {
+            if (!messageObj) return '';
+            const inner =
+                messageObj.ephemeralMessage?.message ||
+                messageObj.viewOnceMessage?.message ||
+                messageObj.viewOnceMessageV2?.message ||
+                messageObj.documentWithCaptionMessage?.message ||
+                messageObj.editedMessage?.message?.protocolMessage?.editedMessage ||
+                messageObj;
+
+            return (
+                inner.conversation ||
+                inner.extendedTextMessage?.text ||
+                inner.imageMessage?.caption ||
+                inner.videoMessage?.caption ||
+                ''
+            );
+        }
+
+        // Listen for commands (Supports both ! and . prefixes, and WhatsApp Business @lid JIDs)
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            for (const msg of messages) {
+                if (!msg || !msg.message) continue;
+
+                const remoteJid = msg.key.remoteJid;
+                if (!remoteJid || remoteJid === 'status@broadcast') continue;
+
+                const text = extractMessageText(msg.message).trim();
+                if (!text) continue;
+
+                const isGroup = remoteJid.endsWith('@g.us');
+                const isLid = remoteJid.endsWith('@lid') || (msg.key.participant && msg.key.participant.endsWith('@lid'));
+                const rawSender = isGroup ? (msg.key.participant || '') : remoteJid;
+                const senderAlt = msg.key.participantAlt || msg.key.remoteJidAlt || '';
+
+                // Log incoming message in Render console for instant debugging
+                console.log(`📩 Incoming [${isGroup ? 'GROUP' : 'DM'}] from ${rawSender} (alt: ${senderAlt || 'none'}, fromMe: ${msg.key.fromMe}): "${text}"`);
+
+                // Accept both '!' and '.' command prefixes (e.g., !add, .add, !alive, .alive)
+                if (!text.startsWith('!') && !text.startsWith('.')) continue;
+
+                const withoutPrefix = text.slice(1).trim();
+                if (!withoutPrefix) continue;
+
+                const args = withoutPrefix.split(/\s+/);
+                const cmd = '!' + args.shift().toLowerCase();
+                const query = args.join(' ');
+
+                // WhatsApp Business uses @lid for DMs! Allow Owner Number, @lid DMs, or self-messages
+                const isOwner =
+                    msg.key.fromMe ||
+                    rawSender.includes(RAW_OWNER) ||
+                    remoteJid.includes(RAW_OWNER) ||
+                    senderAlt.includes(RAW_OWNER) ||
+                    (!isGroup && isLid) ||
+                    !isGroup; // Any direct message to the bot can control or test it
+
+                try {
+                    // 0. Quick Status / Alive Check (!alive, .alive, !ping, !help)
+                    if (cmd === '!alive' || cmd === '!ping' || cmd === '!help') {
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *WA RadioBot v2.4 (Skip + GitHub MP3 + Anti-Drop) is ONLINE!* ✅\n\n` +
+                                  `👑 *Controller:* +${RAW_OWNER}\n` +
+                                  `🤖 *Bot Line:* +${pairingPhoneNumber}\n` +
+                                  `🎶 *Now Playing:* ${nowPlaying ? nowPlaying.title : 'Nothing playing'}\n` +
+                                  `🎵 *Songs in Queue:* ${requestQueue.length}\n` +
+                                  `📢 *Bound Group:* ${targetGroupJid ? 'Linked ✅' : 'Not bound yet (Send !bind in group)'}\n\n` +
+                                  `*Commands (both ! and . work):*\n` +
+                                  `• \`!add <song name or .mp3 link>\`\n` +
+                                  `• \`!repo <github repo/folder url>\` (Loads all .mp3s!)\n` +
+                                  `• \`!sync\` (Syncs .mp3s from ${DEFAULT_GITHUB_REPO})\n` +
+                                  `• \`!play\` (Start playing queue)\n` +
+                                  `• \`!skip\` or \`!next\` (Stop current & play next song)\n` +
+                                  `• \`!stop\` (Stop current playback & clear timer)\n` +
+                                  `• \`!list\` (View queue)\n` +
+                                  `• \`!top <number>\` / \`!remove <number>\`\n` +
+                                  `• \`!autodj\`\n` +
+                                  `• \`!bind\` (send inside your WhatsApp group)`
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (cmd === '!bind' && isGroup) {
+                        targetGroupJid = remoteJid;
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs & GitHub MP3s will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (!isOwner) continue;
+
+                    // NEW: !repo or !sync -> Fetch all .mp3 files from a GitHub repo or folder URL
+                    if (cmd === '!repo' || cmd === '!sync' || cmd === '!github') {
+                        const targetRepoUrl = query || DEFAULT_GITHUB_REPO;
+                        await sock.sendMessage(remoteJid, {
+                            text: `🔄 Scanning GitHub repository for \`.mp3\` tracks:\n*${targetRepoUrl}*...`
+                        }, { quoted: msg });
+
+                        try {
+                            const mp3Tracks = await fetchGitHubRepoMp3s(targetRepoUrl);
+                            if (mp3Tracks.length === 0) {
+                                await sock.sendMessage(remoteJid, {
+                                    text: `📭 No \`.mp3\` files found in *${targetRepoUrl}*.\n\n*Tip:* Upload \`.mp3\` files to your GitHub repo (or a subfolder like \`https://github.com/BUSA2023/Wabot/tree/main/songs\`) and run \`!repo <url>\` again!`
+                                }, { quoted: msg });
+                                continue;
+                            }
+
+                            requestQueue.push(...mp3Tracks);
+                            const previewList = mp3Tracks.slice(0, 10).map((t, i) => `${i + 1}. 🎵 ${t.title}`).join('\n');
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Synced ${mp3Tracks.length} MP3 Song(s) from GitHub!*\n\n${previewList}${mp3Tracks.length > 10 ? `\n...and ${mp3Tracks.length - 10} more!` : ''}\n\n_Type !play to start broadcasting or !list to view the queue._`
+                            }, { quoted: msg });
+                        } catch (repoErr) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `❌ Could not load GitHub repo: ${repoErr.message}`
+                            }, { quoted: msg });
+                        }
+                        continue;
+                    }
+
+                    if (cmd === '!add') {
+                        if (!query) {
+                            await sock.sendMessage(remoteJid, {
+                                text: '⚠️ Usage:\n• `!add https://github.com/.../song.mp3` (Direct MP3)\n• `!add https://github.com/user/repo` (All Repo MP3s)\n• `!add Blinding Lights` (YouTube Search)'
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        // 1. Check if the user passed a GitHub Repository/Folder link to !add
+                        if (/^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+(\/tree\/.*)?$/i.test(query.trim()) && !/\.(mp3|m4a|ogg|wav)(\?.*)?$/i.test(query.trim())) {
+                            await sock.sendMessage(remoteJid, { text: `🔄 Scanning GitHub repository for MP3 files: *${query}*...` }, { quoted: msg });
+                            const mp3Tracks = await fetchGitHubRepoMp3s(query.trim());
+                            if (mp3Tracks.length === 0) {
+                                await sock.sendMessage(remoteJid, { text: '📭 No `.mp3` files found in that GitHub repository folder.' }, { quoted: msg });
+                                continue;
+                            }
+                            requestQueue.push(...mp3Tracks);
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Added ${mp3Tracks.length} MP3 track(s) from GitHub Repo!*\nType \`!list\` to inspect or \`!play\` to broadcast.`
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        // 2. Check if the user passed a Direct .mp3 / GitHub file link
+                        const normalizedUrl = normalizeGitHubMp3Url(query);
+                        if (/^https?:\/\/.+\.(mp3|m4a|ogg|wav)(\?.*)?$/i.test(normalizedUrl) || normalizedUrl.includes('raw.githubusercontent.com')) {
+                            const rawFileName = normalizedUrl.split('/').pop().split('?')[0];
+                            const cleanTitle = decodeURIComponent(rawFileName.replace(/\.(mp3|m4a|ogg|wav)$/i, '').replace(/[-_]/g, ' ')) || 'GitHub MP3 Track';
+
+                            const songItem = {
+                                title: cleanTitle,
+                                url: normalizedUrl,
+                                duration: 'Direct MP3',
+                                thumbnail: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',
+                                author: 'GitHub MP3',
+                                isDirectMp3: true
+                            };
+
+                            requestQueue.push(songItem);
+                            await sock.sendMessage(remoteJid, {
+                                text: `✅ *Added Direct MP3 to Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n🔗 Source: GitHub / Direct MP3\n\n_Type !play to broadcast immediately._`
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        // 3. Otherwise search YouTube
+                        await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` }, { quoted: msg });
+                        const searchResult = await yts(query);
+                        const video = searchResult.videos && searchResult.videos[0];
+
+                        if (!video) {
+                            await sock.sendMessage(remoteJid, { text: '❌ Could not find that song. Try another keyword.' }, { quoted: msg });
+                            continue;
+                        }
+
+                        const songItem = {
+                            title: video.title,
+                            url: video.url,
+                            duration: video.timestamp || '3:30',
+                            thumbnail: video.thumbnail,
+                            author: video.author?.name || 'Artist'
+                        };
+
+                        requestQueue.push(songItem);
+
+                        await sock.sendMessage(remoteJid, {
+                            text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately._`
+                        }, { quoted: msg });
+                    }
+                    else if (cmd === '!list' || cmd === '!queue') {
+                        if (requestQueue.length === 0) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `${nowPlaying ? `🎶 *Now Playing:* ${nowPlaying.title}\n\n` : ''}📭 Your upcoming queue is empty. Use \`!add <song>\` or \`!sync\` to add tracks.`
+                            }, { quoted: msg });
+                            continue;
+                        }
+
+                        const listString = requestQueue
+                            .map((s, idx) => `*${idx + 1}.* 🎵 ${s.title} (${s.duration})`)
+                            .join('\n');
+
+                        await sock.sendMessage(remoteJid, {
+                            text: `${nowPlaying ? `🎶 *Now Playing:* ${nowPlaying.title}\n\n` : ''}📻 *Your Personal Request List:*\n\n${listString}\n\n*Controls:*\n• \`!skip\` or \`!next\` (Skip current song)\n• \`!stop\` (Stop current song)\n• \`!remove <number>\` / \`!top <number>\`\n• \`!autodj\` (Continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Broadcast now)`
+                        }, { quoted: msg });
+                    }
+                    else if (cmd === '!remove') {
+                        const index = parseInt(query, 10) - 1;
+                        if (isNaN(index) || index < 0 || index >= requestQueue.length) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Invalid song number. Check `!list` first.' }, { quoted: msg });
+                            continue;
+                        }
+                        const removed = requestQueue.splice(index, 1)[0];
+                        await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` }, { quoted: msg });
+                    }
+                    else if (cmd === '!top') {
+                        const index = parseInt(query, 10) - 1;
+                        if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
+                            await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid song number (2 or higher) to move to #1.' }, { quoted: msg });
+                            continue;
+                        }
+                        const [promoted] = requestQueue.splice(index, 1);
+                        requestQueue.unshift(promoted);
+                        await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` }, { quoted: msg });
+                    }
+                    else if (cmd === '!autodj') {
+                        autoDjEnabled = !autoDjEnabled;
+                        await sock.sendMessage(remoteJid, {
+                            text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
+                        }, { quoted: msg });
+                    }
+                    else if (cmd === '!skip' || cmd === '!next') {
+                        const skippedTitle = nowPlaying ? nowPlaying.title : null;
+                        if (skippedTitle) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `⏭️ Skipping *${skippedTitle}*...`
+                            }, { quoted: msg });
+                        }
+                        await broadcastNextSong(remoteJid, true);
+                    }
+                    else if (cmd === '!stop') {
+                        if (autoDjTimer) {
+                            clearTimeout(autoDjTimer);
+                            autoDjTimer = null;
+                        }
+                        if (currentDownloadAbort) {
+                            try { currentDownloadAbort(); } catch (e) {}
+                            currentDownloadAbort = null;
+                        }
+                        if (lastPlayedAudioKey && lastPlayedJid) {
+                            try {
+                                await sock.sendMessage(lastPlayedJid, { delete: lastPlayedAudioKey });
+                                lastPlayedAudioKey = null;
+                            } catch (e) {}
+                        }
+                        const stoppedTitle = nowPlaying ? nowPlaying.title : 'current playback';
+                        nowPlaying = null;
+                        await sock.sendMessage(remoteJid, {
+                            text: `⏹️ Stopped *${stoppedTitle}* and removed the audio player from chat. Send \`!play\` or \`!skip\` when ready to resume.`
+                        }, { quoted: msg });
+                    }
+                    else if (cmd === '!play' || cmd === '!playnext') {
+                        await broadcastNextSong(remoteJid, false);
+                    }
+                } catch (err) {
+                    console.error('Bot Command Error:', err);
+                    await sock.sendMessage(remoteJid, { text: '⚠️ Error processing command: ' + err.message });
+                }
+            }
+        });
+    } catch (initErr) {
+        isConnecting = false;
+        console.error('Bot initialization error, retrying in 5s:', initErr.message);
+        setTimeout(() => startRadioBot(false), 5000);
+    }
+}
+
+process.on('uncaughtException', (err) => {
+    console.error('Caught exception (Server kept alive):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled rejection (Server kept alive):', reason);
+});
+
+startRadioBot(false);
