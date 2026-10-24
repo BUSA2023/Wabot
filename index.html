@@ -36,7 +36,7 @@
                 <div>
                     <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
                         WA RadioBot Studio
-                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.0 Connection Fix</span>
+                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.1 Anti-Race Fix</span>
                     </h1>
                     <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
                 </div>
@@ -76,21 +76,21 @@
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                     <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-red-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Bug #1 Fixed: Status 515 Wipe</div>
+                        <div class="text-red-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Log Fix #1: Double `/pair` Race</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            When you scan a QR code or enter an 8-digit pairing code, WhatsApp disconnects the socket with <code>Status 515 (restartRequired)</code> to load encryption keys. Your old <code>bot.js</code> wiped <code>auth_info_baileys</code> on every close—deleting your login mid-handshake!
+                            Your logs showed <code>Switching to 8-Digit Pairing Mode</code> firing twice in 0.8s (`16:42:25` & `16:42:26`). The second hit wiped the encryption keys for <code>X1SF-KFBS</code>! v2.1 adds a 15-second cooldown lock and separates tab-switching (`/mode`) from code generation (`POST /pair`).
                         </p>
                     </div>
                     <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Bug #2 Fixed: QR vs Pairing Clash</div>
+                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-bug mr-1"></i> Log Fix #2: Node 26 vs Node 20 LTS</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            Calling <code>requestPairingCode()</code> on a 3.5s timer while also trying to render a QR code corrupts the WebSocket handshake. Now you can cleanly switch between <strong>QR Mode</strong> and <strong>8-Digit Code Mode</strong> via tabs!
+                            Render installed experimental <code>Node.js 26.12.1</code> because <code>package.json</code> had <code>>=20.0.0</code>. We pinned <code>"node": "20.x"</code> in <code>package.json</code> so Render uses stable LTS Node 20.
                         </p>
                     </div>
                     <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-check-double mr-1"></i> Bug #3 Fixed: Local QR Renderer</div>
+                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-check-double mr-1"></i> Log Fix #3: Socket Instance Lock</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            Added the official <code>qrcode</code> package to render base64 QR images directly inside your server's memory, plus live AJAX polling every 2 seconds so you never scan an expired code.
+                            Each socket now gets a unique <code>currentSocketId</code> and removed the deprecated <code>printQRInTerminal</code> flag so closing an old socket never interferes with your new pairing code.
                         </p>
                     </div>
                 </div>
