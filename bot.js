@@ -1,11 +1,11 @@
 /**
  * ============================================================================
- * WHATSAPP HIGH-QUALITY RADIO & PERSONAL QUEUE BOT (24/7 CLOUD EDITION)
+ * WHATSAPP HIGH-QUALITY RADIO & PERSONAL QUEUE BOT (v2.0 CONNECTION FIX)
  * ============================================================================
  * Pre-Configured Numbers & Live Render Server:
  * - Live URL:     https://wabot-4nbu.onrender.com
  * - Owner Number: +91 9539601481 (Controls Queue via DM)
- * - Bot Number:   +91 9656977828 (8-Digit Pairing Login)
+ * - Bot Number:   +91 9656977828 (QR & 8-Digit Pairing Login)
  * ============================================================================
  */
 
@@ -14,10 +14,13 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore
+    makeCacheableSignalKeyStore,
+    Browsers,
+    delay
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
+const QRCode = require('qrcode');
 const yts = require('yt-search');
 const ytdl = require('@distube/ytdl-core');
 const fs = require('fs');
@@ -25,7 +28,7 @@ const path = require('path');
 const https = require('https');
 
 // ============================================================================
-// CONFIGURATION (PRE-CONFIGURED FOR YOUR NUMBERS & RENDER URL)
+// CONFIGURATION
 // ============================================================================
 const PORT = process.env.PORT || 10000;
 
@@ -34,7 +37,7 @@ const RAW_OWNER = (process.env.OWNER_NUMBER || '919539601481').replace(/[^0-9]/g
 const OWNER_NUMBER = RAW_OWNER + '@s.whatsapp.net';
 
 // Your Bot WhatsApp Number (Used for 8-Digit Cloud Pairing Code Login)
-const BOT_NUMBER = (process.env.BOT_NUMBER || '919656977828').replace(/[^0-9]/g, '');
+const DEFAULT_BOT_NUMBER = (process.env.BOT_NUMBER || '919656977828').replace(/[^0-9]/g, '');
 
 // Your Live Render URL for automatic 24/7 self-pinging
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4nbu.onrender.com';
@@ -46,18 +49,25 @@ let requestQueue = [];
 let targetGroupJid = null;
 let nowPlaying = null;
 let autoDjEnabled = true;
-let latestPairingCode = null;
-let latestQrString = null;
-let botConnectionStatus = 'Starting up...';
 let autoDjTimer = null;
+
+// Connection State
 let activeSock = null;
 let isConnected = false;
+let isConnecting = false;
+let authMode = 'qr'; // 'qr' or 'pair'
+let pairingPhoneNumber = DEFAULT_BOT_NUMBER;
+let latestPairingCode = null;
+let latestQrDataUrl = null;
+let botConnectionStatus = 'Initializing WhatsApp Socket...';
+let pairingRequestedInCycle = false;
 
-// Helper to wipe incomplete pairing sessions so new codes never fail
+// Safely wipe auth folder ONLY on explicit reset or LoggedOut (401)
 function clearAuthFolder() {
     try {
         if (fs.existsSync(AUTH_DIR)) {
             fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            console.log('🧹 Cleared old auth_info_baileys session folder.');
         }
     } catch (e) {
         console.error('Could not clear auth folder:', e.message);
@@ -65,118 +75,221 @@ function clearAuthFolder() {
 }
 
 // ============================================================================
-// 1. FREE HOSTING 24/7 KEEP-ALIVE & LIVE PAIRING WEB SERVER
+// 1. EXPRESS WEB DASHBOARD (UNIFIED QR + 8-DIGIT PAIRING CONTROLLER)
 // ============================================================================
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Interactive Status & Instant Pairing Dashboard
+// Live JSON status endpoint for auto-updating frontend
+app.get('/status', (req, res) => {
+    res.json({
+        isConnected,
+        authMode,
+        status: botConnectionStatus,
+        pairingCode: latestPairingCode,
+        qrDataUrl: latestQrDataUrl,
+        botNumber: pairingPhoneNumber,
+        ownerNumber: RAW_OWNER,
+        queueLength: requestQueue.length,
+        nowPlaying: nowPlaying ? nowPlaying.title : null
+    });
+});
+
+// Trigger 8-Digit Pairing Code Mode cleanly
+app.get('/pair', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+    const customPhone = (req.query.phone || DEFAULT_BOT_NUMBER).replace(/[^0-9]/g, '');
+    if (customPhone.length >= 10) {
+        pairingPhoneNumber = customPhone;
+    }
+
+    console.log(`🔄 Switching to 8-Digit Pairing Mode for +${pairingPhoneNumber}...`);
+    authMode = 'pair';
+    latestPairingCode = 'GENERATING...';
+    latestQrDataUrl = null;
+    botConnectionStatus = `Generating fresh 8-digit pairing code for +${pairingPhoneNumber}...`;
+
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Trigger Clean QR Code Mode
+app.get('/qr-mode', async (req, res) => {
+    if (isConnected) return res.redirect('/');
+    console.log('🔄 Switching to Clean QR Code Scan Mode...');
+    authMode = 'qr';
+    latestPairingCode = null;
+    latestQrDataUrl = null;
+    botConnectionStatus = 'Generating fresh QR code...';
+
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Full Session Reset Button
+app.get('/reset', async (req, res) => {
+    console.log('⚠️ Manual session reset requested.');
+    isConnected = false;
+    latestPairingCode = null;
+    latestQrDataUrl = null;
+    authMode = 'qr';
+    botConnectionStatus = 'Session wiped. Restarting socket...';
+    clearAuthFolder();
+    await startRadioBot(true);
+    res.redirect('/');
+});
+
+// Main Live Pairing & Status Dashboard
 app.get('/', (req, res) => {
     res.status(200).send(`
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>WA RadioBot Live Server</title>
+        <title>WA RadioBot Connection Hub</title>
         <style>
-            body { font-family: system-ui, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 620px; margin: 0 auto; }
-            .card { background: #1f2c34; border-radius: 16px; padding: 22px; margin-bottom: 16px; border: 1px solid #2a3942; }
-            .code-box { font-size: 32px; font-weight: 800; letter-spacing: 4px; color: #00a884; background: #111b21; padding: 16px; border-radius: 12px; text-align: center; margin: 14px 0; border: 2px dashed #00a884; }
-            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; margin-top: 8px; }
-            .status { color: #00a884; font-weight: bold; }
-            code { background: #111b21; padding: 2px 6px; border-radius: 4px; color: #53bdeb; }
+            * { box-sizing: border-box; }
+            body { font-family: system-ui, -apple-system, sans-serif; background: #0b141a; color: #e9edef; padding: 20px; max-width: 680px; margin: 0 auto; }
+            .card { background: #1f2c34; border-radius: 16px; padding: 24px; margin-bottom: 18px; border: 1px solid #2a3942; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+            .badge { display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; background: #00a88422; color: #00a884; border: 1px solid #00a88455; }
+            .code-box { font-size: 32px; font-weight: 800; letter-spacing: 5px; color: #00a884; background: #111b21; padding: 18px; border-radius: 12px; text-align: center; margin: 16px 0; border: 2px dashed #00a884; font-family: monospace; }
+            .qr-box { background: #ffffff; padding: 16px; border-radius: 16px; display: inline-block; margin: 14px auto; }
+            .btn { display: inline-block; background: #00a884; color: #0b141a; font-weight: 700; text-decoration: none; padding: 12px 20px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px; transition: 0.2s; }
+            .btn:hover { background: #06cf9c; }
+            .btn-secondary { background: #2a3942; color: #e9edef; }
+            .btn-secondary:hover { background: #374852; }
+            .btn-danger { background: #ef444422; color: #f87171; border: 1px solid #ef444455; }
+            .tabs { display: flex; gap: 10px; margin-bottom: 16px; }
+            input { background: #111b21; border: 1px solid #2a3942; color: #fff; padding: 11px 14px; border-radius: 10px; font-size: 14px; width: 220px; }
+            code { background: #111b21; padding: 3px 6px; border-radius: 5px; color: #53bdeb; }
         </style>
     </head>
     <body>
         <div class="card">
-            <h2>📻 WhatsApp RadioBot (+${BOT_NUMBER})</h2>
-            <p><strong>Status:</strong> <span class="status">${botConnectionStatus}</span></p>
-            <p><strong>Owner DM Controller:</strong> +${RAW_OWNER}</p>
-            <hr style="border-color:#2a3942; margin: 16px 0;">
-            ${isConnected ? `
-                <h3 style="color:#00a884;">✅ Bot is Linked & Online 24/7!</h3>
-                <p>Send <code>!add Song Name</code> or <code>!list</code> to <strong>+${BOT_NUMBER}</strong> from your personal number (<strong>+${RAW_OWNER}</strong>).</p>
-            ` : `
-                <h3>🔑 Step 1: Link Your Bot Number (+${BOT_NUMBER})</h3>
-                <p>If you get "Try again later", please wait 2 minutes, then click below to generate a fresh pairing code:</p>
-                <div class="code-box">${latestPairingCode || 'CLICK BUTTON BELOW'}</div>
-                <div style="text-align:center;">
-                    <a class="btn" href="/pair">🔄 Generate Fresh 8-Digit Code Now</a>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <h2 style="margin:0;">📻 WA RadioBot v2.0</h2>
+                <span class="badge" id="conn-badge">Checking...</span>
+            </div>
+            <p style="color:#8696a0; font-size:14px; margin-top:8px;">
+                <strong>Status:</strong> <span id="status-text" style="color:#00a884; font-weight:bold;">${botConnectionStatus}</span><br>
+                <strong>Owner DM Controller:</strong> +${RAW_OWNER} &bull; <strong>Target Bot Line:</strong> +<span id="bot-num">${pairingPhoneNumber}</span>
+            </p>
+            <hr style="border-color:#2a3942; margin: 18px 0;">
+
+            <!-- CONNECTED VIEW -->
+            <div id="connected-view" style="display:none; text-align:center; padding:10px 0;">
+                <h3 style="color:#00a884; font-size:22px; margin-bottom:8px;">✅ WhatsApp Bot is Linked & Online 24/7!</h3>
+                <p style="font-size:14px; color:#d1d7db;">Send <code>!add Song Name</code>, <code>!list</code>, or <code>!play</code> to <strong>+${pairingPhoneNumber}</strong> from your personal WhatsApp (<strong>+${RAW_OWNER}</strong>).</p>
+                <p style="font-size:13px; color:#8696a0;">In your WhatsApp group, send <code>!bind</code> once to set that group as the radio broadcast destination.</p>
+                <div style="margin-top:20px;">
+                    <a class="btn btn-danger" href="/reset" onclick="return confirm('Disconnect current WhatsApp session?')">🔌 Disconnect / Relink Another Number</a>
                 </div>
-                <p style="font-size:13px; color:#8696a0; margin-top:16px;">
-                    <strong>Alternative:</strong> <a href="/qr" style="color:#53bdeb;">Click here to view a Live QR Code</a> and scan it normally!
-                </p>
-            `}
+            </div>
+
+            <!-- UNCONNECTED LOGIN VIEW -->
+            <div id="login-view">
+                <div class="tabs">
+                    <a class="btn ${authMode === 'qr' ? '' : 'btn-secondary'}" href="/qr-mode">📷 Method 1: Scan QR Code (Fastest)</a>
+                    <a class="btn ${authMode === 'pair' ? '' : 'btn-secondary'}" href="/pair?phone=${pairingPhoneNumber}">🔢 Method 2: 8-Digit Pairing Code</a>
+                </div>
+
+                <!-- QR MODE -->
+                <div id="qr-section" style="display:${authMode === 'qr' ? 'block' : 'none'}; text-align:center; background:#111b21; padding:20px; border-radius:12px;">
+                    <h3 style="margin-top:0;">📷 Scan Instant QR Code</h3>
+                    <p style="font-size:13px; color:#8696a0;">Open WhatsApp on <strong>+${pairingPhoneNumber}</strong> &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link a Device</strong></p>
+                    <div id="qr-container">
+                        <p style="color:#00a884; padding:30px;">⏳ Waiting for fresh QR code from WhatsApp...</p>
+                    </div>
+                    <p style="font-size:12px; color:#8696a0;">QR refreshes automatically on this page without reloading!</p>
+                </div>
+
+                <!-- PAIRING CODE MODE -->
+                <div id="pair-section" style="display:${authMode === 'pair' ? 'block' : 'none'}; background:#111b21; padding:20px; border-radius:12px;">
+                    <h3 style="margin-top:0;">🔑 Link with 8-Digit Phone Code</h3>
+                    <p style="font-size:13px; color:#8696a0; line-height:1.5;">
+                        1. Open WhatsApp on your bot phone &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link with phone number instead</strong>.<br>
+                        2. Type your bot number below and click <strong>Get Fresh Code</strong> while your phone screen is open:
+                    </p>
+                    <form action="/pair" method="GET" style="display:flex; gap:10px; flex-wrap:wrap; margin:14px 0;">
+                        <input type="text" name="phone" value="${pairingPhoneNumber}" placeholder="CountryCode+Number (e.g. 919656977828)" required />
+                        <button type="submit" class="btn">🔄 Get Fresh 8-Digit Code</button>
+                    </form>
+                    <div class="code-box" id="pair-code-box">${latestPairingCode || 'WAITING...'}</div>
+                    <p style="font-size:12px; color:#eab308; text-align:center;">
+                        ⚠️ Important: After typing the code on your phone, wait 5-10 seconds for WhatsApp to finish syncing keys!
+                    </p>
+                </div>
+
+                <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:12px; color:#8696a0;">Stuck or code expired? Wipe partial state:</span>
+                    <a class="btn btn-danger" style="padding:8px 14px; font-size:12px;" href="/reset">🧹 Hard Reset Auth Folder</a>
+                </div>
+            </div>
         </div>
-    </body>
-    </html>
-    `);
-});
 
-// Fresh On-Demand 8-Digit Pairing Code Generator
-app.get('/pair', async (req, res) => {
-    if (isConnected) {
-        return res.redirect('/');
-    }
-    try {
-        clearAuthFolder();
-        latestPairingCode = 'GENERATING...';
-        await startRadioBot(true);
-        await new Promise(resolve => setTimeout(resolve, 6000));
-        res.redirect('/');
-    } catch (err) {
-        res.status(500).send('Error generating code: ' + err.message);
-    }
-});
+        <script>
+            async function pollStatus() {
+                try {
+                    const res = await fetch('/status');
+                    const data = await res.json();
+                    document.getElementById('status-text').textContent = data.status;
+                    document.getElementById('bot-num').textContent = data.botNumber;
+                    const badge = document.getElementById('conn-badge');
 
-// Live QR Code Web Page
-app.get('/qr', (req, res) => {
-    if (isConnected) {
-        return res.send('<h2>✅ Bot is already connected!</h2><a href="/">Back to Dashboard</a>');
-    }
-    const qrImageUrl = latestQrString
-        ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(latestQrString)}`
-        : null;
+                    if (data.isConnected) {
+                        badge.textContent = 'ONLINE 24/7';
+                        badge.style.background = '#00a88433';
+                        badge.style.color = '#00a884';
+                        document.getElementById('connected-view').style.display = 'block';
+                        document.getElementById('login-view').style.display = 'none';
+                    } else {
+                        badge.textContent = data.authMode === 'pair' ? 'PAIRING MODE' : 'QR SCAN MODE';
+                        badge.style.background = '#eab30822';
+                        badge.style.color = '#facc15';
+                        document.getElementById('connected-view').style.display = 'none';
+                        document.getElementById('login-view').style.display = 'block';
 
-    res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta http-equiv="refresh" content="8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Scan WhatsApp QR Code</title>
-        <style>
-            body { font-family: system-ui, sans-serif; background: #0b141a; color: #fff; text-align: center; padding: 30px; }
-            .box { background: #1f2c34; padding: 24px; border-radius: 16px; display: inline-block; max-width: 380px; }
-            img { background: white; padding: 12px; border-radius: 12px; margin: 16px 0; }
-            a { color: #00a884; }
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h2>📷 Scan QR with +${BOT_NUMBER}</h2>
-            <p style="font-size:14px; color:#8696a0;">Open WhatsApp on +${BOT_NUMBER} &rarr; Linked Devices &rarr; Link a Device &rarr; Scan QR</p>
-            ${qrImageUrl
-                ? `<img src="${qrImageUrl}" width="280" height="280" alt="WhatsApp QR" />`
-                : `<p>⏳ Generating fresh QR code... (Page auto-refreshes in 8s)</p>`
+                        if (data.authMode === 'qr') {
+                            document.getElementById('qr-section').style.display = 'block';
+                            document.getElementById('pair-section').style.display = 'none';
+                            const qrContainer = document.getElementById('qr-container');
+                            if (data.qrDataUrl) {
+                                qrContainer.innerHTML = '<div class="qr-box"><img src="' + data.qrDataUrl + '" width="260" height="260" alt="WhatsApp QR"/></div>';
+                            } else {
+                                qrContainer.innerHTML = '<p style="color:#00a884; padding:30px;">⏳ Generating QR Code... (Takes 2-4 seconds)</p>';
+                            }
+                        } else {
+                            document.getElementById('qr-section').style.display = 'none';
+                            document.getElementById('pair-section').style.display = 'block';
+                            document.getElementById('pair-code-box').textContent = data.pairingCode || 'GENERATING...';
+                        }
+                    }
+                } catch (e) {}
             }
-            <p><a href="/">⬅ Back to Dashboard</a></p>
-        </div>
+            setInterval(pollStatus, 2000);
+            pollStatus();
+        </script>
     </body>
     </html>
     `);
 });
 
+// Backwards-compatible /qr route redirects to main unified dashboard
+app.get('/qr', (req, res) => res.redirect('/qr-mode'));
+
+// Lightweight 24/7 Wake-Up Endpoint for Cron-job.org / UptimeRobot
 app.get('/ping', (req, res) => {
     res.status(200).send('PONG - RadioBot Awake 24/7');
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌐 Free-Hosting 24/7 Keep-Alive & Radio Server running on port ${PORT}`);
+    console.log(`🌐 24/7 Keep-Alive & Radio Server running on port ${PORT}`);
     console.log(`👑 Owner Number configured: +${RAW_OWNER}`);
-    console.log(`🤖 Bot Number configured:   +${BOT_NUMBER}`);
+    console.log(`🤖 Bot Number configured:   +${pairingPhoneNumber}`);
 
     if (RENDER_EXTERNAL_URL && RENDER_EXTERNAL_URL.startsWith('https://')) {
         setInterval(() => {
@@ -188,93 +301,136 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // ============================================================================
-// 2. WHATSAPP BOT CORE LOGIC
+// 2. WHATSAPP BOT CORE LOGIC (FIXED HANDSHAKE & MULTI-DEVICE AUTH)
 // ============================================================================
 const logger = pino({ level: 'silent' });
-let isStarting = false;
 
-async function startRadioBot(forceFreshCode = false) {
-    if (isStarting && !forceFreshCode) return;
-    isStarting = true;
+async function startRadioBot(forceRestart = false) {
+    if (isConnecting && !forceRestart) return;
+    isConnecting = true;
+    pairingRequestedInCycle = false;
 
     try {
+        // Cleanly close existing socket if restarting
         if (activeSock) {
-            try { activeSock.ev.removeAllListeners(); activeSock.end(undefined); } catch (e) {}
+            try {
+                activeSock.ev.removeAllListeners();
+                activeSock.ws.close();
+            } catch (e) {}
             activeSock = null;
         }
 
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-        const { version } = await fetchLatestBaileysVersion();
+
+        // Fetch latest WhatsApp Web version with safe fallback
+        let version = [2, 3000, 1015901307];
+        try {
+            const latest = await fetchLatestBaileysVersion();
+            if (latest && latest.version) version = latest.version;
+        } catch (verErr) {
+            console.log('Using fallback WhatsApp Web version:', version);
+        }
 
         const sock = makeWASocket({
             version,
             logger,
-            printQRInTerminal: false,
+            printQRInTerminal: authMode === 'qr',
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
-            browser: ['Ubuntu', 'Chrome', '20.0.04'],
+            // Official Ubuntu Chrome signature required for both QR & Pairing Code
+            browser: Browsers.ubuntu('Chrome'),
             markOnlineOnConnect: true,
             syncFullHistory: false,
+            generateHighQualityLinkPreview: false,
             connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 15000
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 20000
         });
 
         activeSock = sock;
 
-        // Request pairing code with a safer 5-second delay to let WebSocket handshake complete
-        if (!sock.authState.creds.registered && BOT_NUMBER) {
-            setTimeout(async () => {
-                try {
-                    if (isConnected || sock.authState.creds.registered) return;
-                    const cleanNumber = BOT_NUMBER.replace(/[^0-9]/g, '');
-                    const code = await sock.requestPairingCode(cleanNumber);
-                    latestPairingCode = code?.match(/.{1,4}/g)?.join('-') || code;
-                    botConnectionStatus = `Waiting for Pairing Code (${latestPairingCode}) on +${cleanNumber}`;
-                    console.log('\n============================================================');
-                    console.log(`🔑 FRESH 8-DIGIT PAIRING CODE FOR +${cleanNumber}: ${latestPairingCode}`);
-                    console.log(`⏰ ENTER WITHIN 45 SECONDS OR VISIT: ${RENDER_EXTERNAL_URL}/pair`);
-                    console.log('============================================================\n');
-                } catch (err) {
-                    console.error('Pairing code generation error:', err.message);
-                }
-            }, 5000);
-        }
-
+        // CRITICAL: Always save credentials immediately whenever updated
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            if (qr) {
-                latestQrString = qr;
+            // 1. Handle QR Generation OR 8-Digit Pairing Code Request
+            if (qr && !sock.authState.creds.registered) {
+                if (authMode === 'qr') {
+                    try {
+                        latestQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, width: 280 });
+                        botConnectionStatus = 'Ready! Scan the QR Code on screen.';
+                        console.log('📷 New QR Code generated and ready at /');
+                    } catch (qrErr) {
+                        console.error('QR generation error:', qrErr.message);
+                    }
+                } else if (authMode === 'pair' && !pairingRequestedInCycle) {
+                    pairingRequestedInCycle = true;
+                    try {
+                        await delay(1500);
+                        const cleanNum = pairingPhoneNumber.replace(/[^0-9]/g, '');
+                        const code = await sock.requestPairingCode(cleanNum);
+                        latestPairingCode = code?.match(/.{1,4}/g)?.join('-') || code;
+                        botConnectionStatus = `Enter code ${latestPairingCode} on WhatsApp (+${cleanNum})`;
+                        console.log('\n============================================================');
+                        console.log(`🔑 8-DIGIT PAIRING CODE FOR +${cleanNum}: ${latestPairingCode}`);
+                        console.log('============================================================\n');
+                    } catch (pairErr) {
+                        console.error('Error requesting pairing code:', pairErr.message);
+                        botConnectionStatus = `Pairing error: ${pairErr.message}. Click Reset & try QR mode.`;
+                    }
+                }
             }
 
+            // 2. Handle Connection Close & Handshake Restart (515)
             if (connection === 'close') {
                 isConnected = false;
-                isStarting = false;
+                isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log(`Connection closed (Status: ${statusCode}).`);
+                const reason = lastDisconnect?.error?.message || 'Unknown';
+                console.log(`⚠️ Connection closed. Status: ${statusCode} (${reason})`);
 
-                if (!sock.authState.creds.registered || statusCode === DisconnectReason.loggedOut) {
-                    console.log('Cleaning partial pairing state so a fresh code can be generated...');
+                if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                    // ONLY wipe auth folder when explicitly logged out (401)
+                    console.log('🧹 Device logged out (401). Wiping auth folder for fresh login...');
                     clearAuthFolder();
+                    latestPairingCode = null;
+                    latestQrDataUrl = null;
+                    botConnectionStatus = 'Logged out. Ready for fresh pairing...';
+                    setTimeout(() => startRadioBot(false), 3000);
+                } else if (statusCode === DisconnectReason.restartRequired || statusCode === 515) {
+                    // CRITICAL FIX: Status 515 happens right after you scan QR or enter the 8-digit code!
+                    // NEVER delete the auth folder here! Reconnect immediately to complete login.
+                    console.log('🔄 Pairing handshake succeeded (515)! Reconnecting immediately to finalize login...');
+                    botConnectionStatus = 'Handshake complete! Finalizing WhatsApp login...';
+                    setTimeout(() => startRadioBot(false), 1000);
+                } else {
+                    // Normal network timeout or QR refresh; preserve existing auth state
+                    botConnectionStatus = `Reconnecting to WhatsApp (Code ${statusCode || 'timeout'})...`;
+                    setTimeout(() => startRadioBot(false), 4000);
                 }
+            }
 
-                botConnectionStatus = 'Reconnecting & refreshing code...';
-                setTimeout(() => startRadioBot(false), 5000);
-            } else if (connection === 'open') {
+            // 3. Handle Successful Connection Open
+            if (connection === 'open') {
                 isConnected = true;
-                isStarting = false;
+                isConnecting = false;
                 latestPairingCode = 'CONNECTED ✅';
-                latestQrString = null;
-                botConnectionStatus = 'Connected & Ready 24/7 ✅';
-                console.log(`✅ WhatsApp High-Quality Radio Bot (+${BOT_NUMBER}) is Connected!`);
+                latestQrDataUrl = null;
+                botConnectionStatus = 'Connected & Streaming 24/7 ✅';
+                console.log(`✅ WhatsApp High-Quality Radio Bot (+${pairingPhoneNumber}) is Connected!`);
+                console.log(`📩 Send commands (!add, !list, !remove, !top, !play) from +${RAW_OWNER}`);
             }
         });
 
+        // Helper function to broadcast the next song in High Quality Stereo MP3
         async function broadcastNextSong(notifyJid) {
             const destinationJid = targetGroupJid || notifyJid;
             if (requestQueue.length === 0) {
@@ -292,7 +448,7 @@ async function startRadioBot(forceFreshCode = false) {
 
             if (notifyJid) {
                 await sock.sendMessage(notifyJid, {
-                    text: `🎧 Broadcasting *${nextSong.title}* in High-Quality Stereo MP3...`
+                    text: `🎧 Broadcasting *${nextSong.title}* in High-Quality Stereo MP3 to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
                 });
             }
 
@@ -311,7 +467,9 @@ async function startRadioBot(forceFreshCode = false) {
                     console.error('Audio download error:', err.message);
                     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                     if (notifyJid) {
-                        await sock.sendMessage(notifyJid, { text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Skipping...` });
+                        await sock.sendMessage(notifyJid, {
+                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Skipping to next song...`
+                        });
                     }
                     if (requestQueue.length > 0) {
                         setTimeout(() => broadcastNextSong(notifyJid), 2000);
@@ -324,7 +482,7 @@ async function startRadioBot(forceFreshCode = false) {
                         await sock.sendMessage(destinationJid, {
                             audio: fs.readFileSync(tempFilePath),
                             mimetype: 'audio/mpeg',
-                            ptt: false,
+                            ptt: false, // Crystal Clear Stereo Music Player
                             fileName: `${nextSong.title}.mp3`,
                             contextInfo: {
                                 externalAdReply: {
@@ -362,6 +520,7 @@ async function startRadioBot(forceFreshCode = false) {
             }
         }
 
+        // Listen for commands
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
             const msg = messages[0];
@@ -391,7 +550,7 @@ async function startRadioBot(forceFreshCode = false) {
                 if (cmd === '!bind' && isGroup && isOwner) {
                     targetGroupJid = remoteJid;
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *RadioBot (+${BOT_NUMBER}) Linked!* Requested songs will now play in this group.`
+                        text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
                     });
                     return;
                 }
@@ -400,16 +559,16 @@ async function startRadioBot(forceFreshCode = false) {
 
                 if (cmd === '!add') {
                     if (!query) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name>`' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Usage: `!add <Song Name or Artist>`' });
                         return;
                     }
 
-                    await sock.sendMessage(remoteJid, { text: `🔎 Searching audio for: *${query}*...` });
+                    await sock.sendMessage(remoteJid, { text: `🔎 Searching high-quality audio for: *${query}*...` });
                     const searchResult = await yts(query);
                     const video = searchResult.videos && searchResult.videos[0];
 
                     if (!video) {
-                        await sock.sendMessage(remoteJid, { text: '❌ Could not find that song.' });
+                        await sock.sendMessage(remoteJid, { text: '❌ Could not find that song. Try another keyword.' });
                         return;
                     }
 
@@ -424,12 +583,12 @@ async function startRadioBot(forceFreshCode = false) {
                     requestQueue.push(songItem);
 
                     await sock.sendMessage(remoteJid, {
-                        text: `✅ *Added to Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*`
+                        text: `✅ *Added to Radio Queue (#${requestQueue.length})*\n🎵 *${songItem.title}*\n⏱️ Duration: ${songItem.duration}\n\n_Type !list to view or !play to broadcast immediately to the group._`
                     });
                 }
                 else if (cmd === '!list' || cmd === '!queue') {
                     if (requestQueue.length === 0) {
-                        await sock.sendMessage(remoteJid, { text: '📭 Request queue is empty. Use `!add <song>`.' });
+                        await sock.sendMessage(remoteJid, { text: '📭 Your request list is empty. Use `!add <song>` to add tracks.' });
                         return;
                     }
 
@@ -438,32 +597,32 @@ async function startRadioBot(forceFreshCode = false) {
                         .join('\n');
 
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *Your Request List:*\n\n${listString}`
+                        text: `📻 *Your Personal Request List (+${RAW_OWNER}):*\n\n${listString}\n\n*Edit Commands:*\n• \`!remove <number>\`\n• \`!top <number>\` (Move song to #1)\n• \`!autodj\` (Toggle continuous radio: ${autoDjEnabled ? 'ON' : 'OFF'})\n• \`!play\` (Send HQ song to group now)`
                     });
                 }
                 else if (cmd === '!remove') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index < 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Invalid number.' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Invalid song number. Check `!list` first.' });
                         return;
                     }
                     const removed = requestQueue.splice(index, 1)[0];
-                    await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}*.` });
+                    await sock.sendMessage(remoteJid, { text: `🗑️ Removed *${removed.title}* from your request list.` });
                 }
                 else if (cmd === '!top') {
                     const index = parseInt(query, 10) - 1;
                     if (isNaN(index) || index <= 0 || index >= requestQueue.length) {
-                        await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid number (2 or higher).' });
+                        await sock.sendMessage(remoteJid, { text: '⚠️ Enter a valid song number (2 or higher) to move to #1.' });
                         return;
                     }
                     const [promoted] = requestQueue.splice(index, 1);
                     requestQueue.unshift(promoted);
-                    await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1!` });
+                    await sock.sendMessage(remoteJid, { text: `⬆️ Moved *${promoted.title}* to #1 in the queue!` });
                 }
                 else if (cmd === '!autodj') {
                     autoDjEnabled = !autoDjEnabled;
                     await sock.sendMessage(remoteJid, {
-                        text: `📻 *Auto-DJ Mode:* ${autoDjEnabled ? '✅ ENABLED' : '⏸️ DISABLED'}`
+                        text: `📻 *Auto-DJ Continuous Radio Mode:* ${autoDjEnabled ? '✅ ENABLED (Songs will play back-to-back automatically)' : '⏸️ DISABLED (Use !play manually)'}`
                     });
                 }
                 else if (cmd === '!play' || cmd === '!playnext') {
@@ -471,16 +630,21 @@ async function startRadioBot(forceFreshCode = false) {
                 }
             } catch (err) {
                 console.error('Bot Command Error:', err);
+                await sock.sendMessage(remoteJid, { text: '⚠️ Error processing command: ' + err.message });
             }
         });
     } catch (initErr) {
-        isStarting = false;
-        console.error('Bot initialization error:', initErr.message);
+        isConnecting = false;
+        console.error('Bot initialization error, retrying in 5s:', initErr.message);
         setTimeout(() => startRadioBot(false), 5000);
     }
 }
 
-process.on('uncaughtException', (err) => { console.error('Caught exception:', err.message); });
-process.on('unhandledRejection', (reason) => { console.error('Unhandled rejection:', reason); });
+process.on('uncaughtException', (err) => {
+    console.error('Caught exception (Server kept alive):', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled rejection (Server kept alive):', reason);
+});
 
 startRadioBot(false);
