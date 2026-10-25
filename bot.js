@@ -55,12 +55,16 @@ const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
 let requestQueue = [];
 let targetGroupJid = null;
 let nowPlaying = null;
+let nowPlayingStartTime = 0;
+let sendAsVoiceNote = false; // false = Stereo MP3 Player, true = Voice Note (PTT) auto-play bubble
 let autoDjEnabled = true;
+let antiLinkEnabled = true; // Automatically delete WhatsApp invite links in bound group
 let autoDjTimer = null;
 let wsKeepAliveInterval = null;
 let lastPlayedAudioKey = null;
 let lastPlayedJid = null;
 let currentDownloadAbort = null;
+let latestAudioBuffer = null;
 
 // Connection & Anti-Race Lock State
 let activeSock = null;
@@ -138,9 +142,157 @@ app.get('/status', (req, res) => {
         ownerNumber: RAW_OWNER,
         queueLength: requestQueue.length,
         nowPlaying: nowPlaying ? nowPlaying.title : null,
+        nowPlayingUrl: nowPlaying ? '/stream-current' : null,
+        nowPlayingStartTime,
+        hasAudioBuffer: Boolean(latestAudioBuffer),
         hasSessionBackup: Boolean(getSessionBackupString()),
         usingEnvBackup: Boolean(ENV_SESSION_DATA)
     });
+});
+
+// Serve the currently playing MP3 buffer directly for the Live Web Radio Player
+app.get('/stream-current', (req, res) => {
+    if (!latestAudioBuffer) {
+        return res.status(404).send('No song currently loaded in memory.');
+    }
+    res.set({
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': latestAudioBuffer.length,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.send(latestAudioBuffer);
+});
+
+// Direct Web Trigger for !skip and !play from the /radio page
+app.post('/radio-action', async (req, res) => {
+    const action = req.body.action;
+    if (!activeSock || !isConnected) {
+        return res.status(400).json({ ok: false, msg: 'Bot not connected to WhatsApp' });
+    }
+    const target = targetGroupJid || OWNER_NUMBER;
+    if (action === 'skip' || action === 'play') {
+        activeSock.ev.emit('messages.upsert', {
+            messages: [{
+                key: { remoteJid: target, fromMe: true, id: 'WEB_' + Date.now() },
+                message: { conversation: action === 'skip' ? '!skip' : '!play' }
+            }],
+            type: 'notify'
+        });
+        return res.json({ ok: true });
+    }
+    res.json({ ok: false });
+});
+
+// Live Synchronized Web Radio Room (So everyone on a WhatsApp Voice Call can listen together live!)
+app.get('/radio', (req, res) => {
+    res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>📻 Kk Live Group Voice-Chat Radio</title>
+        <style>
+            * { box-sizing: border-box; }
+            body { font-family: system-ui, sans-serif; background: #0b141a; color: #e9edef; padding: 16px; max-width: 520px; margin: 0 auto; text-align: center; }
+            .card { background: #1f2c34; border-radius: 20px; padding: 24px; border: 1px solid #2a3942; box-shadow: 0 12px 30px rgba(0,0,0,0.5); margin-top: 12px; }
+            .disc { width: 88px; height: 88px; border-radius: 50%; background: linear-gradient(135deg, #00a884, #059669); display: flex; align-items: center; justify-content: center; font-size: 38px; margin: 0 auto 14px; animation: spin 5s linear infinite; }
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+            .btn { background: #00a884; color: #0b141a; font-weight: 800; padding: 15px 20px; border-radius: 12px; border: none; cursor: pointer; font-size: 15px; width: 100%; margin-top: 12px; box-shadow: 0 4px 15px rgba(0,168,132,0.3); }
+            .controls { display: flex; gap: 10px; margin-top: 12px; }
+            .btn-ctrl { flex: 1; background: #2a3942; color: #e9edef; font-weight: 700; padding: 11px 14px; border-radius: 10px; border: 1px solid #374852; cursor: pointer; font-size: 13px; }
+            .btn-ctrl:hover { background: #374852; }
+            .tip-box { background: #111b21; border: 1px solid #00a88455; border-radius: 12px; padding: 14px; margin-top: 16px; text-align: left; font-size: 12px; color: #d1d7db; line-height: 1.6; }
+            audio { width: 100%; margin-top: 14px; border-radius: 10px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="disc">🎧</div>
+            <div style="font-size:11px; color:#00a884; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Kk Group Voice-Chat Live Speaker</div>
+            <h2 id="song-title" style="margin:8px 0; font-size:18px;">Waiting for song (!play)...</h2>
+            <p id="sync-status" style="font-size:12px; color:#8696a0; margin:4px 0;">Tap the green button below once, then go back to your WhatsApp Voice Chat!</p>
+            
+            <button class="btn" id="unlock-btn" onclick="enableAudio()">🔊 TAP HERE TO JOIN LIVE VOICE-CHAT AUDIO</button>
+            
+            <audio id="radio-audio" controls playsinline></audio>
+
+            <div class="controls">
+                <button class="btn-ctrl" onclick="triggerAction('play')">▶️ Play Queue</button>
+                <button class="btn-ctrl" onclick="triggerAction('skip')">⏭️ Skip Song</button>
+            </div>
+
+            <div class="tip-box">
+                <strong style="color:#00a884;">❓ Why doesn't the bot appear as a person inside the Voice Chat circle?</strong><br>
+                WhatsApp blocks cloud servers from joining group Voice Calls as a participant. Instead:<br>
+                • <strong>Method A (Best):</strong> Both you &amp; <strong>Calibri</strong> open this page once and tap the green button. Now both of you hear every song live in sync while talking in the WhatsApp Voice Chat!<br>
+                • <strong>Method B (No link for friends):</strong> On your phone, open this page, go to the WhatsApp Voice Chat, tap <code>...</code> &rarr; <strong>Share Screen</strong>, and unmute your mic!
+            </div>
+        </div>
+        <script>
+            let lastStartTime = 0;
+            let audioUnlocked = false;
+            const audioEl = document.getElementById('radio-audio');
+            const unlockBtn = document.getElementById('unlock-btn');
+            const syncStatus = document.getElementById('sync-status');
+
+            function enableAudio() {
+                audioUnlocked = true;
+                unlockBtn.textContent = '✅ LIVE VOICE-CHAT AUDIO ACTIVE (Keep Open in Background)';
+                unlockBtn.style.background = '#059669';
+                unlockBtn.style.color = '#ffffff';
+                if (lastStartTime > 0) {
+                    const elapsedSec = Math.max(0, Math.floor((Date.now() - lastStartTime) / 1000));
+                    audioEl.src = '/stream-current?t=' + lastStartTime;
+                    audioEl.currentTime = elapsedSec;
+                }
+                audioEl.play().catch(() => {});
+            }
+
+            async function triggerAction(action) {
+                enableAudio();
+                syncStatus.textContent = '⏳ Sending ' + action.toUpperCase() + ' command to bot...';
+                await fetch('/radio-action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action })
+                });
+            }
+
+            async function syncRadio() {
+                try {
+                    const res = await fetch('/status');
+                    const data = await res.json();
+                    const titleEl = document.getElementById('song-title');
+                    if (data.nowPlaying && data.hasAudioBuffer) {
+                        titleEl.textContent = '🎵 ' + data.nowPlaying;
+                        if (data.nowPlayingStartTime !== lastStartTime) {
+                            lastStartTime = data.nowPlayingStartTime;
+                            const elapsedSec = Math.max(0, Math.floor((Date.now() - lastStartTime) / 1000));
+                            audioEl.src = '/stream-current?t=' + lastStartTime;
+                            audioEl.onloadedmetadata = () => {
+                                if (elapsedSec < audioEl.duration - 2) {
+                                    audioEl.currentTime = elapsedSec;
+                                }
+                            };
+                            if (audioUnlocked) {
+                                audioEl.play().catch(() => {});
+                            }
+                        }
+                        syncStatus.textContent = '🟢 Live Synced with Group • ' + data.queueLength + ' song(s) in queue';
+                    } else {
+                        titleEl.textContent = 'No song playing right now';
+                        syncStatus.textContent = 'Tap "Play Queue" above or send !play in WhatsApp!';
+                    }
+                } catch (e) {}
+            }
+            setInterval(syncRadio, 2000);
+            syncRadio();
+        </script>
+    </body>
+    </html>
+    `);
 });
 
 // Endpoint to get the Base64 SESSION_DATA backup string for Render Environment Variables
@@ -469,33 +621,51 @@ app.listen(PORT, '0.0.0.0', () => {
 // Convert standard GitHub blob URL to raw.githubusercontent.com URL
 function normalizeGitHubMp3Url(rawUrl) {
     let url = rawUrl.trim();
-    // Convert https://github.com/user/repo/blob/branch/path.mp3 -> https://raw.githubusercontent.com/user/repo/branch/path.mp3
     if (url.includes('github.com') && url.includes('/blob/')) {
         url = url
             .replace('https://github.com/', 'https://raw.githubusercontent.com/')
             .replace('/blob/', '/');
     }
+    // Safely encode spaces or special characters if not already encoded
+    try {
+        const decoded = decodeURI(url);
+        url = encodeURI(decoded);
+    } catch (e) {}
     return url;
 }
 
-// Download any direct .mp3 URL (including GitHub Raw) with redirect support
+// Download any direct .mp3 URL (including GitHub Raw) into a Buffer or file with redirect support
 function downloadDirectMp3(fileUrl, destPath) {
     return new Promise((resolve, reject) => {
-        const client = fileUrl.startsWith('https') ? https : http;
-        const req = client.get(fileUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (WA-RadioBot/2.3)' }
+        const safeUrl = normalizeGitHubMp3Url(fileUrl);
+        const client = safeUrl.startsWith('https') ? https : http;
+        const req = client.get(safeUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*'
+            }
         }, (res) => {
-            // Follow 301/302 redirects (GitHub raw redirects)
+            // Follow 301/302/307/308 redirects (GitHub raw redirects)
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return downloadDirectMp3(res.headers.location, destPath).then(resolve).catch(reject);
             }
             if (res.statusCode !== 200) {
-                return reject(new Error(`HTTP Status ${res.statusCode}`));
+                return reject(new Error(`HTTP Status ${res.statusCode} from ${safeUrl}`));
             }
             const fileStream = fs.createWriteStream(destPath);
             res.pipe(fileStream);
             fileStream.on('finish', () => {
-                fileStream.close(() => resolve(destPath));
+                fileStream.close(() => {
+                    try {
+                        const stats = fs.statSync(destPath);
+                        if (stats.size < 1024) {
+                            return reject(new Error('Downloaded file is empty or invalid (< 1KB)'));
+                        }
+                        resolve(destPath);
+                    } catch (statErr) {
+                        reject(statErr);
+                    }
+                });
             });
             fileStream.on('error', (err) => {
                 if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
@@ -503,9 +673,9 @@ function downloadDirectMp3(fileUrl, destPath) {
             });
         });
         req.on('error', reject);
-        req.setTimeout(45000, () => {
+        req.setTimeout(60000, () => {
             req.destroy();
-            reject(new Error('Download timeout'));
+            reject(new Error('Download timeout (60s)'));
         });
     });
 }
@@ -763,6 +933,7 @@ async function startRadioBot(forceRestart = false) {
             const destinationJid = targetGroupJid || notifyJid;
             if (requestQueue.length === 0) {
                 nowPlaying = null;
+                latestAudioBuffer = null;
                 if (notifyJid) {
                     await sock.sendMessage(notifyJid, {
                         text: isSkip
@@ -775,11 +946,24 @@ async function startRadioBot(forceRestart = false) {
 
             const nextSong = requestQueue.shift();
             nowPlaying = nextSong;
+            nowPlayingStartTime = Date.now();
 
             if (notifyJid) {
                 await sock.sendMessage(notifyJid, {
-                    text: `${isSkip ? '⏭️ *Skipped to Next Track!*\n' : ''}🎧 Broadcasting *${nextSong.title}* (${nextSong.isDirectMp3 ? 'GitHub Direct MP3' : 'HQ Stereo MP3'}) to ${targetGroupJid ? 'your bound Group' : 'this chat'}...`
+                    text: `${isSkip ? '⏭️ *Skipped to Next Track!*\n' : ''}🎧 *Now Broadcasting:* *${nextSong.title}*\n\n` +
+                          `🔊 *On a WhatsApp Voice Chat?* Tap once to hear live together:\n👉 ${RENDER_EXTERNAL_URL}/radio\n` +
+                          `_(Or tap \`...\` &rarr; *Share Screen* in the Voice Chat bar to pipe audio directly into the call!)_`
                 });
+            }
+
+            // If broadcasting to a bound group and command came from DM, also post the Live Voice-Chat Radio banner in the group!
+            if (targetGroupJid && notifyJid !== targetGroupJid) {
+                try {
+                    await sock.sendMessage(targetGroupJid, {
+                        text: `📻 *Now Playing in Group Radio:* *${nextSong.title}*\n` +
+                              `🔊 *In the Voice Chat?* Tap to hear live together: ${RENDER_EXTERNAL_URL}/radio`
+                    });
+                } catch (e) {}
             }
 
             const tempFilePath = path.join(__dirname, `temp_${Date.now()}.mp3`);
@@ -798,29 +982,46 @@ async function startRadioBot(forceRestart = false) {
                 currentDownloadAbort = null;
                 try {
                     if (!fs.existsSync(tempFilePath)) return;
+                    const audioBuffer = fs.readFileSync(tempFilePath);
+                    latestAudioBuffer = audioBuffer;
+                    nowPlayingStartTime = Date.now();
+
+                    console.log(`📤 Sending audio "${nextSong.title}" (${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB) to ${destinationJid}...`);
+
+                    // Send clean audio payload (Removed broken externalAdReply thumbnail which caused Android WhatsApp to drop the audio message)
                     const sentMsg = await sock.sendMessage(destinationJid, {
-                        audio: fs.readFileSync(tempFilePath),
-                        mimetype: 'audio/mpeg',
-                        ptt: false, // Crystal Clear Stereo Music Player
-                        fileName: `${nextSong.title}.mp3`,
-                        contextInfo: {
-                            externalAdReply: {
-                                title: `📻 Now Playing: ${nextSong.title}`,
-                                body: `High-Quality Radio • Controlled by +${RAW_OWNER}`,
-                                mediaType: 2,
-                                thumbnailUrl: nextSong.thumbnail,
-                                sourceUrl: nextSong.url
-                            }
-                        }
+                        audio: audioBuffer,
+                        mimetype: sendAsVoiceNote ? 'audio/ogg; codecs=opus' : 'audio/mpeg',
+                        ptt: sendAsVoiceNote, // false = Stereo Music Player, true = Voice Note bubble
+                        fileName: `${nextSong.title}.mp3`
                     });
+
+                    // If a Group is bound AND the owner triggered !play from DM, ALSO send the audio to the owner's DM if they are testing in DM!
+                    if (targetGroupJid && notifyJid && notifyJid !== targetGroupJid) {
+                        await sock.sendMessage(notifyJid, {
+                            audio: audioBuffer,
+                            mimetype: sendAsVoiceNote ? 'audio/ogg; codecs=opus' : 'audio/mpeg',
+                            ptt: sendAsVoiceNote,
+                            fileName: `${nextSong.title}.mp3`
+                        });
+                    }
+
                     if (sentMsg && sentMsg.key) {
                         lastPlayedAudioKey = sentMsg.key;
                         lastPlayedJid = destinationJid;
                     }
+                    console.log(`✅ Successfully delivered audio "${nextSong.title}"!`);
                 } catch (sendErr) {
                     console.error('Error sending audio message:', sendErr.message);
+                    if (notifyJid) {
+                        await sock.sendMessage(notifyJid, {
+                            text: `⚠️ Error delivering audio to WhatsApp: ${sendErr.message}`
+                        });
+                    }
                 } finally {
-                    if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+                    if (fs.existsSync(tempFilePath)) {
+                        try { fs.unlinkSync(tempFilePath); } catch (e) {}
+                    }
                 }
 
                 if (autoDjEnabled && requestQueue.length > 0 && !isAborted) {
@@ -832,7 +1033,7 @@ async function startRadioBot(forceRestart = false) {
                     const delayMs = Math.min(Math.max(seconds * 1000, 30000), 8 * 60 * 1000);
                     autoDjTimer = setTimeout(() => {
                         if (autoDjEnabled && requestQueue.length > 0) {
-                            broadcastNextSong(OWNER_NUMBER, false);
+                            broadcastNextSong(notifyJid || OWNER_NUMBER, false);
                         }
                     }, delayMs);
                 }
@@ -870,7 +1071,7 @@ async function startRadioBot(forceRestart = false) {
                     if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
                     if (notifyJid) {
                         await sock.sendMessage(notifyJid, {
-                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Tip: Use GitHub .mp3 links (\`!add https://...song.mp3\` or \`!repo\`) for 100% reliability!`
+                            text: `⚠️ Could not stream *${nextSong.title}* (${err.message}). Tip: Use GitHub .mp3 links (\`!add https://...song.mp3\` or \`!sync\`) for 100% reliability!`
                         });
                     }
                     if (requestQueue.length > 0) {
@@ -931,6 +1132,43 @@ async function startRadioBot(forceRestart = false) {
                 // Log incoming message in Render console for instant debugging
                 console.log(`📩 Incoming [${isGroup ? 'GROUP' : 'DM'}] from ${rawSender} (alt: ${senderAlt || 'none'}, fromMe: ${msg.key.fromMe}): "${text}"`);
 
+                // ============================================================================
+                // 🛡️ INSTANT ANTI-LINK & NSFW/ADULT CONTENT GUARD (ONLY IN BOUND GROUP)
+                // ============================================================================
+                const waInviteRegex = /(https?:\/\/)?(www\.)?(chat\.whatsapp\.com|whatsapp\.com\/channel|wa\.me\/joinchat)\/[A-Za-z0-9_-]+/i;
+                const adultContentRegex = /\b(porn|pornhub|xvideos|xnxx|xhamster|redtube|youporn|spankbang|brazzers|onlyfans|nsfw|xxx|sexvideo|nude|nudes|chaturbate|stripchat|erotic|camgirl|hentai)\b|(https?:\/\/[^\s]*(xxx|porn|sex|nsfw|xvideos|xnxx|pornhub|xhamster)[^\s]*)/i;
+
+                if (isGroup && antiLinkEnabled && targetGroupJid && remoteJid === targetGroupJid) {
+                    const isWaLink = waInviteRegex.test(text);
+                    const isAdultContent = adultContentRegex.test(text);
+
+                    if (isWaLink || isAdultContent) {
+                        const isSenderOwner =
+                            msg.key.fromMe ||
+                            rawSender.includes(RAW_OWNER) ||
+                            senderAlt.includes(RAW_OWNER);
+
+                        // Delete immediately if sent by any group member (unless sent by the Owner/Bot itself)
+                        if (!isSenderOwner) {
+                            const violationType = isAdultContent
+                                ? '🔞 *Anti-NSFW Guard:* Adult/explicit links and messages are strictly prohibited in this group!'
+                                : '🚫 *Anti-Link Protection:* WhatsApp group/channel invite links are not allowed in this group!';
+
+                            console.log(`🚫 Detected prohibited content (${isAdultContent ? 'NSFW/Adult' : 'WA Invite Link'}) in bound group from ${rawSender}! Deleting immediately...`);
+                            try {
+                                await sock.sendMessage(remoteJid, { delete: msg.key });
+                                await sock.sendMessage(remoteJid, {
+                                    text: violationType,
+                                    mentions: rawSender ? [rawSender] : []
+                                });
+                            } catch (delErr) {
+                                console.error('⚠️ Failed to delete prohibited message (Make sure Bot +91 9656977828 is a Group Admin!):', delErr.message);
+                            }
+                            continue;
+                        }
+                    }
+                }
+
                 // Accept both '!' and '.' command prefixes (e.g., !add, .add, !alive, .alive)
                 if (!text.startsWith('!') && !text.startsWith('.')) continue;
 
@@ -954,23 +1192,19 @@ async function startRadioBot(forceRestart = false) {
                     // 0. Quick Status / Alive Check (!alive, .alive, !ping, !help)
                     if (cmd === '!alive' || cmd === '!ping' || cmd === '!help') {
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *WA RadioBot v2.4 (Skip + GitHub MP3 + Anti-Drop) is ONLINE!* ✅\n\n` +
+                            text: `📻 *WA RadioBot v3.2 (Radio + Anti-Link Guard) is ONLINE!* ✅\n\n` +
                                   `👑 *Controller:* +${RAW_OWNER}\n` +
                                   `🤖 *Bot Line:* +${pairingPhoneNumber}\n` +
+                                  `🛡️ *Bound Group Anti-Link:* ${antiLinkEnabled ? 'ON ✅ (Auto-Deletes WA Links)' : 'OFF ❌'}\n` +
                                   `🎶 *Now Playing:* ${nowPlaying ? nowPlaying.title : 'Nothing playing'}\n` +
                                   `🎵 *Songs in Queue:* ${requestQueue.length}\n` +
-                                  `📢 *Bound Group:* ${targetGroupJid ? 'Linked ✅' : 'Not bound yet (Send !bind in group)'}\n\n` +
+                                  `🌐 *Live Voice-Chat Radio:* ${RENDER_EXTERNAL_URL}/radio\n\n` +
                                   `*Commands (both ! and . work):*\n` +
-                                  `• \`!add <song name or .mp3 link>\`\n` +
-                                  `• \`!repo <github repo/folder url>\` (Loads all .mp3s!)\n` +
+                                  `• \`!bind\` (Bind group for Radio & Anti-Link Guard)\n` +
+                                  `• \`!antilink\` (Toggle auto-delete WhatsApp links ON/OFF)\n` +
                                   `• \`!sync\` (Syncs .mp3s from ${DEFAULT_GITHUB_REPO})\n` +
-                                  `• \`!play\` (Start playing queue)\n` +
-                                  `• \`!skip\` or \`!next\` (Stop current & play next song)\n` +
-                                  `• \`!stop\` (Stop current playback & clear timer)\n` +
-                                  `• \`!list\` (View queue)\n` +
-                                  `• \`!top <number>\` / \`!remove <number>\`\n` +
-                                  `• \`!autodj\`\n` +
-                                  `• \`!bind\` (send inside your WhatsApp group)`
+                                  `• \`!play\` / \`!skip\` / \`!stop\`\n` +
+                                  `• \`!list\` / \`!top <num>\` / \`!remove <num>\``
                         }, { quoted: msg });
                         continue;
                     }
@@ -978,7 +1212,32 @@ async function startRadioBot(forceRestart = false) {
                     if (cmd === '!bind' && isGroup) {
                         targetGroupJid = remoteJid;
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs & GitHub MP3s will now play in this group.\n\n👑 Admin (+${RAW_OWNER}) can manage the playlist privately via Personal DM!`
+                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs & GitHub MP3s will now play in this group.\n\n` +
+                                  `🛡️ *Anti-Link Guard Active:* Any WhatsApp group/channel invite links sent by members in this bound group will be deleted automatically! _(Make sure +${pairingPhoneNumber} is a **Group Admin** so it can delete others' messages!)_`
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (cmd === '!antilink') {
+                        antiLinkEnabled = !antiLinkEnabled;
+                        await sock.sendMessage(remoteJid, {
+                            text: `🛡️ *Bound Group Anti-Link & Anti-NSFW Protection:* ${antiLinkEnabled ? '✅ ENABLED (WhatsApp invite links & NSFW/adult messages will be deleted instantly)' : '⏸️ DISABLED'}`
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (cmd === '!unbind') {
+                        targetGroupJid = null;
+                        await sock.sendMessage(remoteJid, {
+                            text: `🔓 Unbound group! Songs will now play directly in this chat.`
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (cmd === '!vn' || cmd === '!ptt') {
+                        sendAsVoiceNote = !sendAsVoiceNote;
+                        await sock.sendMessage(remoteJid, {
+                            text: `🎙️ *Audio Delivery Format Switched:* ${sendAsVoiceNote ? '✅ *Voice Note Bubble (PTT)* (Auto-plays consecutively in WhatsApp!)' : '🎵 *HQ Stereo MP3 Player*'}`
                         }, { quoted: msg });
                         continue;
                     }
