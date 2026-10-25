@@ -50,6 +50,7 @@ const DEFAULT_GITHUB_REPO = process.env.GITHUB_REPO || 'https://github.com/BUSA2
 const ENV_SESSION_DATA = process.env.SESSION_DATA || '';
 
 const AUTH_DIR = path.join(__dirname, 'auth_info_baileys');
+const BOUND_GROUP_FILE = path.join(__dirname, 'bound_group.json');
 
 // In-Memory State
 let requestQueue = [];
@@ -90,7 +91,30 @@ function clearAuthFolder() {
     }
 }
 
-// Restore creds.json from Render Environment Variable (SESSION_DATA) if container restarted
+// Save & Load Bound Group JID so you don't lose your bound group if socket restarts
+function loadSavedGroupJid() {
+    try {
+        if (process.env.TARGET_GROUP_JID) {
+            targetGroupJid = process.env.TARGET_GROUP_JID.trim();
+            return;
+        }
+        if (fs.existsSync(BOUND_GROUP_FILE)) {
+            const data = JSON.parse(fs.readFileSync(BOUND_GROUP_FILE, 'utf-8'));
+            if (data && data.groupJid) targetGroupJid = data.groupJid;
+        }
+    } catch (e) {}
+}
+
+function saveBoundGroupJid(jid) {
+    targetGroupJid = jid;
+    try {
+        fs.writeFileSync(BOUND_GROUP_FILE, JSON.stringify({ groupJid: jid }), 'utf-8');
+    } catch (e) {}
+}
+
+loadSavedGroupJid();
+
+// Restore creds.json (or multi-file bundle) from Render Environment Variable (SESSION_DATA)
 function restoreSessionFromEnv() {
     try {
         if (!ENV_SESSION_DATA || ENV_SESSION_DATA.trim().length < 20) return false;
@@ -100,9 +124,18 @@ function restoreSessionFromEnv() {
         const credsPath = path.join(AUTH_DIR, 'creds.json');
         if (!fs.existsSync(credsPath)) {
             const decoded = Buffer.from(ENV_SESSION_DATA.trim(), 'base64').toString('utf-8');
-            JSON.parse(decoded); // Validate JSON before writing
-            fs.writeFileSync(credsPath, decoded, 'utf-8');
-            console.log('🛡️ Restored WhatsApp login session from SESSION_DATA environment variable!');
+            const parsed = JSON.parse(decoded);
+
+            // Support both multi-file backup bundle and single creds.json backup
+            if (parsed && parsed.__isMultiFileBundle && parsed.files) {
+                for (const [fileName, fileContent] of Object.entries(parsed.files)) {
+                    fs.writeFileSync(path.join(AUTH_DIR, fileName), fileContent, 'utf-8');
+                }
+                console.log('🛡️ Restored full WhatsApp multi-file session bundle from SESSION_DATA!');
+            } else {
+                fs.writeFileSync(credsPath, decoded, 'utf-8');
+                console.log('🛡️ Restored WhatsApp creds.json from SESSION_DATA environment variable!');
+            }
             return true;
         }
     } catch (err) {
@@ -111,13 +144,23 @@ function restoreSessionFromEnv() {
     return false;
 }
 
-// Export current creds.json as a Base64 string so user can save it in Render Environment Variables
+// Export creds.json + pre-keys as a Base64 bundle so Signal decryption never stalls after redeploy
 function getSessionBackupString() {
     try {
         const credsPath = path.join(AUTH_DIR, 'creds.json');
         if (fs.existsSync(credsPath)) {
-            const raw = fs.readFileSync(credsPath, 'utf-8');
-            return Buffer.from(raw, 'utf-8').toString('base64');
+            const allFiles = fs.readdirSync(AUTH_DIR);
+            const filesMap = {};
+            for (const file of allFiles) {
+                if (file === 'creds.json' || file.startsWith('pre-key-') || file.startsWith('app-state-sync-key-')) {
+                    const fullPath = path.join(AUTH_DIR, file);
+                    if (fs.statSync(fullPath).isFile()) {
+                        filesMap[file] = fs.readFileSync(fullPath, 'utf-8');
+                    }
+                }
+            }
+            const bundle = JSON.stringify({ __isMultiFileBundle: true, files: filesMap });
+            return Buffer.from(bundle, 'utf-8').toString('base64');
         }
     } catch (e) {}
     return null;
@@ -796,11 +839,13 @@ async function startRadioBot(forceRestart = false) {
             markOnlineOnConnect: true,
             syncFullHistory: false,
             generateHighQualityLinkPreview: false,
+            // CRITICAL FIX: Ignore WhatsApp Channels (@newsletter) & Status Broadcasts so they never stall the bot
+            shouldIgnoreJid: (jid) => !jid || jid.endsWith('@newsletter') || jid === 'status@broadcast' || jid.endsWith('@broadcast'),
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
             // CRITICAL FIX FOR CONNECTION DROPS: Send WebSocket ping every 20s & retry fast
             keepAliveIntervalMs: 20000,
-            retryRequestDelayMs: 1500,
+            retryRequestDelayMs: 1000,
             maxMsgRetryCount: 5,
             // Required by WhatsApp Business Multi-Device to decrypt incoming DM commands reliably
             getMessage: async () => ({ conversation: 'WA RadioBot' })
@@ -895,6 +940,30 @@ async function startRadioBot(forceRestart = false) {
                 botConnectionStatus = 'Connected & Streaming 24/7 ✅';
                 console.log(`✅ WhatsApp High-Quality Radio Bot (+${pairingPhoneNumber}) is Connected!`);
                 console.log(`📩 Send commands (!add, !repo, !sync, !list, !play) from +${RAW_OWNER}`);
+
+                // CRITICAL FIX FOR POST-REDEPLOY SILENCE: Upload fresh Signal Pre-Keys if container disk was wiped!
+                try {
+                    if (typeof sock.uploadPreKeysToServerIfRequired === 'function') {
+                        await sock.uploadPreKeysToServerIfRequired();
+                    } else if (typeof sock.uploadPreKeys === 'function') {
+                        await sock.uploadPreKeys();
+                    }
+                    console.log('🔐 Verified & synced Signal encryption pre-keys with WhatsApp server.');
+                } catch (pkErr) {
+                    console.log('Pre-key check note:', pkErr.message);
+                }
+
+                // Auto-load GitHub MP3s into the queue if queue is empty after a Render redeploy
+                if (requestQueue.length === 0 && DEFAULT_GITHUB_REPO) {
+                    fetchGitHubRepoMp3s(DEFAULT_GITHUB_REPO)
+                        .then((tracks) => {
+                            if (tracks && tracks.length > 0 && requestQueue.length === 0) {
+                                requestQueue.push(...tracks);
+                                console.log(`🎵 Auto-loaded ${tracks.length} MP3 song(s) from GitHub repository on startup!`);
+                            }
+                        })
+                        .catch((e) => console.log('Startup GitHub sync note:', e.message));
+                }
 
                 // Start Active WebSocket Heartbeat every 45 seconds so NAT/Render never drops the idle socket
                 if (wsKeepAliveInterval) clearInterval(wsKeepAliveInterval);
@@ -1119,7 +1188,7 @@ async function startRadioBot(forceRestart = false) {
                 if (!msg || !msg.message) continue;
 
                 const remoteJid = msg.key.remoteJid;
-                if (!remoteJid || remoteJid === 'status@broadcast') continue;
+                if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter') || remoteJid.endsWith('@broadcast')) continue;
 
                 const text = extractMessageText(msg.message).trim();
                 if (!text) continue;
@@ -1128,6 +1197,11 @@ async function startRadioBot(forceRestart = false) {
                 const isLid = remoteJid.endsWith('@lid') || (msg.key.participant && msg.key.participant.endsWith('@lid'));
                 const rawSender = isGroup ? (msg.key.participant || '') : remoteJid;
                 const senderAlt = msg.key.participantAlt || msg.key.remoteJidAlt || '';
+
+                // Prevent bot from replying to its own automated status replies
+                if (msg.key.fromMe && /^(📻|🎧|⏭️|⏹️|✅|📭|⚠️|🛡️|🔓|🎙️|🗑️|⬆️|🔎|🔄|❌)/.test(text)) {
+                    continue;
+                }
 
                 // Log incoming message in Render console for instant debugging
                 console.log(`📩 Incoming [${isGroup ? 'GROUP' : 'DM'}] from ${rawSender} (alt: ${senderAlt || 'none'}, fromMe: ${msg.key.fromMe}): "${text}"`);
@@ -1189,31 +1263,40 @@ async function startRadioBot(forceRestart = false) {
                     !isGroup; // Any direct message to the bot can control or test it
 
                 try {
-                    // 0. Quick Status / Alive Check (!alive, .alive, !ping, !help)
-                    if (cmd === '!alive' || cmd === '!ping' || cmd === '!help') {
+                    // 0. Quick Status / Menu Check (!alive, !menu, !msnu, !ping, !help)
+                    if (cmd === '!alive' || cmd === '!ping' || cmd === '!help' || cmd === '!menu' || cmd === '!msnu' || cmd === '!start') {
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *WA RadioBot v3.2 (Radio + Anti-Link Guard) is ONLINE!* ✅\n\n` +
+                            text: `📻 *WA RadioBot v3.3 (Radio + Anti-Link Guard) is ONLINE!* ✅\n\n` +
                                   `👑 *Controller:* +${RAW_OWNER}\n` +
                                   `🤖 *Bot Line:* +${pairingPhoneNumber}\n` +
-                                  `🛡️ *Bound Group Anti-Link:* ${antiLinkEnabled ? 'ON ✅ (Auto-Deletes WA Links)' : 'OFF ❌'}\n` +
+                                  `📌 *Bound Group:* ${targetGroupJid ? 'Linked ✅ (' + targetGroupJid + ')' : 'Not bound yet (Send .bind inside your Group)'}\n` +
+                                  `🛡️ *Group Anti-Link & NSFW Guard:* ${antiLinkEnabled ? 'ON ✅' : 'OFF ❌'}\n` +
                                   `🎶 *Now Playing:* ${nowPlaying ? nowPlaying.title : 'Nothing playing'}\n` +
                                   `🎵 *Songs in Queue:* ${requestQueue.length}\n` +
                                   `🌐 *Live Voice-Chat Radio:* ${RENDER_EXTERNAL_URL}/radio\n\n` +
-                                  `*Commands (both ! and . work):*\n` +
-                                  `• \`!bind\` (Bind group for Radio & Anti-Link Guard)\n` +
-                                  `• \`!antilink\` (Toggle auto-delete WhatsApp links ON/OFF)\n` +
-                                  `• \`!sync\` (Syncs .mp3s from ${DEFAULT_GITHUB_REPO})\n` +
-                                  `• \`!play\` / \`!skip\` / \`!stop\`\n` +
-                                  `• \`!list\` / \`!top <num>\` / \`!remove <num>\``
+                                  `*Commands (both . and ! work):*\n` +
+                                  `• \`.bind\` (Send inside Group to bind Radio & Anti-Link)\n` +
+                                  `• \`.antilink\` (Toggle auto-delete WhatsApp/NSFW links)\n` +
+                                  `• \`.sync\` (Syncs .mp3s from GitHub repo)\n` +
+                                  `• \`.add <song or .mp3 url>\`\n` +
+                                  `• \`.play\` / \`.skip\` / \`.stop\`\n` +
+                                  `• \`.list\` / \`.top <num>\` / \`.remove <num>\``
                         }, { quoted: msg });
                         continue;
                     }
 
-                    if (cmd === '!bind' && isGroup) {
-                        targetGroupJid = remoteJid;
+                    if (cmd === '!bind') {
+                        if (!isGroup) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `⚠️ *How to Bind Your Group:*\nPlease send \`.bind\` or \`!bind\` **inside your WhatsApp Group chat** (not here in DM) so I know which group to broadcast music and protect with Anti-Link!`
+                            }, { quoted: msg });
+                            continue;
+                        }
+                        saveBoundGroupJid(remoteJid);
                         await sock.sendMessage(remoteJid, {
-                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked!* High-quality requested songs & GitHub MP3s will now play in this group.\n\n` +
-                                  `🛡️ *Anti-Link Guard Active:* Any WhatsApp group/channel invite links sent by members in this bound group will be deleted automatically! _(Make sure +${pairingPhoneNumber} is a **Group Admin** so it can delete others' messages!)_`
+                            text: `📻 *RadioBot (+${pairingPhoneNumber}) Linked to This Group!* ✅\n\n` +
+                                  `🎵 High-quality requested songs & GitHub MP3s will now play here.\n` +
+                                  `🛡️ *Anti-Link & Anti-NSFW Guard Active:* WhatsApp invite links and adult/NSFW messages sent by members will be deleted automatically! _(Make sure +${pairingPhoneNumber} is a **Group Admin**!)_`
                         }, { quoted: msg });
                         continue;
                     }
@@ -1414,7 +1497,25 @@ async function startRadioBot(forceRestart = false) {
                         }, { quoted: msg });
                     }
                     else if (cmd === '!play' || cmd === '!playnext') {
+                        // If queue is empty when user types .play, automatically sync GitHub repo first!
+                        if (requestQueue.length === 0 && DEFAULT_GITHUB_REPO) {
+                            await sock.sendMessage(remoteJid, {
+                                text: `🔄 Queue was empty after restart — auto-syncing MP3s from your GitHub repo (*${DEFAULT_GITHUB_REPO}*)...`
+                            }, { quoted: msg });
+                            try {
+                                const autoTracks = await fetchGitHubRepoMp3s(DEFAULT_GITHUB_REPO);
+                                if (autoTracks.length > 0) {
+                                    requestQueue.push(...autoTracks);
+                                }
+                            } catch (e) {}
+                        }
                         await broadcastNextSong(remoteJid, false);
+                    }
+                    else {
+                        // Reply to any unrecognized command (like typos) so the user always knows the bot is alive
+                        await sock.sendMessage(remoteJid, {
+                            text: `🤖 Unknown command \`${text}\`. Type \`.menu\` or \`.list\` to see available commands!`
+                        }, { quoted: msg });
                     }
                 } catch (err) {
                     console.error('Bot Command Error:', err);
@@ -1428,6 +1529,22 @@ async function startRadioBot(forceRestart = false) {
         setTimeout(() => startRadioBot(false), 5000);
     }
 }
+
+// Cleanly close WhatsApp socket when Render stops an old container during a redeploy
+function gracefulShutdown(signal) {
+    console.log(`🛑 Received ${signal}. Closing old container WhatsApp socket cleanly to prevent 440 conflict...`);
+    if (wsKeepAliveInterval) clearInterval(wsKeepAliveInterval);
+    if (activeSock) {
+        try {
+            activeSock.ev.removeAllListeners();
+            activeSock.ws.close();
+        } catch (e) {}
+    }
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
     console.error('Caught exception (Server kept alive):', err.message);
