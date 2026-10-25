@@ -36,7 +36,7 @@
                 <div>
                     <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
                         WA RadioBot Studio
-                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v2.3 GitHub MP3 + Anti-Drop</span>
+                        <span class="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-medium">v3.0 Audio Delivery Fix + Live Web Radio</span>
                     </h1>
                     <p class="text-xs text-slate-400">Owner DM: <strong class="text-emerald-400">+91 9539601481</strong> • Bot Line: <strong class="text-teal-300">+91 9656977828</strong></p>
                 </div>
@@ -75,23 +75,22 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                    <div class="bg-slate-950/90 border border-emerald-500/40 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-brands fa-github mr-1"></i> New v2.3: GitHub `.mp3` & Repo Sync</div>
+                    <div class="bg-slate-950/90 border border-red-500/40 p-4 rounded-xl">
+                        <div class="text-red-400 text-xs font-bold mb-1"><i class="fa-solid fa-circle-exclamation mr-1"></i> Why Bots Can't Join Voice Chat Directly</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            Send <code>!add https://github.com/.../song.mp3</code> for single tracks, or <code>!repo https://github.com/BUSA2023/Wabot</code> (or <code>!sync</code>) to load all <code>.mp3</code> files from a GitHub repo live!
+                            WhatsApp does <strong>not</strong> allow cloud bots (Baileys/Render) to join the <code>Kk</code> Voice Chat circle as a speaker. Cloud bots can only send audio files to the text chat OR stream to a live web radio room.
+                        </p>
+                    </div>
+                    <div class="bg-slate-950/90 border border-emerald-500/40 p-4 rounded-xl">
+                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-tower-broadcast mr-1"></i> Solution 1: Both Open `/radio` (Best)</div>
+                        <p class="text-xs text-slate-300 leading-relaxed">
+                            You and <code>Calibri</code> both open <code>https://wabot-4nbu.onrender.com/radio</code> in Chrome and tap the green button once, then switch back to the <code>Kk</code> Voice Chat! Every song plays on both phones in real time!
                         </p>
                     </div>
                     <div class="bg-slate-950/90 border border-amber-500/40 p-4 rounded-xl">
-                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-shield-heart mr-1"></i> Why Connection Dropped & Urgent Fix</div>
+                        <div class="text-amber-400 text-xs font-bold mb-1"><i class="fa-solid fa-mobile-screen-button mr-1"></i> Solution 2: Share Screen Audio in Call</div>
                         <p class="text-xs text-slate-300 leading-relaxed">
-                            1) Render sleeps after 15m unless pinged <strong>externally</strong> (use Cron-Job.org on <code>/ping</code>).<br>
-                            2) Pushing MP3s to the <em>same</em> GitHub repo triggers a Render redeploy which wipes your login! Disable "Auto-Deploy" on Render or keep MP3s in a separate repo.
-                        </p>
-                    </div>
-                    <div class="bg-slate-950/90 border border-slate-800 p-4 rounded-xl">
-                        <div class="text-emerald-400 text-xs font-bold mb-1"><i class="fa-solid fa-heart-pulse mr-1"></i> 20s Socket Heartbeat Added</div>
-                        <p class="text-xs text-slate-300 leading-relaxed">
-                            Added a 20-second Baileys WebSocket ping + 45-second active presence heartbeat and automatic session recovery on codes <code>408/516</code> so temporary network drops reconnect in 2.5s without losing your session.
+                            In the <code>Kk</code> Voice Chat bar, tap <code>...</code> (bottom-left) &rarr; <strong>Share Screen</strong> and <strong>unmute your mic</strong> while playing the song! WhatsApp will send your phone's music directly to <code>Calibri</code> inside the call!
                         </p>
                     </div>
                 </div>
@@ -135,12 +134,13 @@
                         <p class="font-semibold text-emerald-400 text-xs mb-1">RadioBot (+91 9656977828)</p>
                         <p class="text-xs leading-relaxed">Welcome Boss (<strong>+91 9539601481</strong>)! 🎧 Message me from your personal WhatsApp to edit the group's playlist privately:</p>
                         <ul class="text-[11px] font-mono text-slate-300 mt-2 space-y-1 bg-slate-900/70 p-2 rounded-lg">
+                            <li><span class="text-emerald-400">!bind</span> (Bind Group for Radio + Anti-Link)</li>
+                            <li><span class="text-emerald-400">!antilink</span> (Toggle WA Invite Link Auto-Delete)</li>
                             <li><span class="text-emerald-400">!add</span> [Song Name or .mp3 URL]</li>
                             <li><span class="text-emerald-400">!sync</span> / <span class="text-emerald-400">!repo</span> (Load GitHub MP3s)</li>
                             <li><span class="text-emerald-400">!list</span> (View current queue)</li>
                             <li><span class="text-emerald-400">!skip</span> or <span class="text-emerald-400">!next</span> (Skip playing song)</li>
                             <li><span class="text-emerald-400">!stop</span> (Stop & delete playing song)</li>
-                            <li><span class="text-emerald-400">!remove</span> [Number] / <span class="text-emerald-400">!top</span> [Number]</li>
                             <li><span class="text-emerald-400">!play</span> (Send HQ track to Group)</li>
                         </ul>
                     </div>
@@ -149,9 +149,10 @@
                 <!-- Quick Command Chips -->
                 <div class="bg-[#182229] px-3 py-2 flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 text-xs">
                     <button onclick="sendQuickCmd('!list')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-full whitespace-nowrap border border-slate-700">!list</button>
+                    <button onclick="sendQuickCmd('!antilink')" class="px-2.5 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded-full whitespace-nowrap border border-purple-500/30">🛡️ !antilink</button>
+                    <button onclick="sendQuickCmd('https://chat.whatsapp.com/InviteTest123')" class="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full whitespace-nowrap border border-red-500/30">🔗 Test WA Link Delete</button>
+                    <button onclick="sendQuickCmd('Check out https://pornhub.com/test')" class="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-full whitespace-nowrap border border-rose-500/30">🔞 Test NSFW Delete</button>
                     <button onclick="sendQuickCmd('!skip')" class="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full whitespace-nowrap border border-amber-500/30">⏭️ !skip</button>
-                    <button onclick="sendQuickCmd('!stop')" class="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-full whitespace-nowrap border border-red-500/30">⏹️ !stop</button>
-                    <button onclick="sendQuickCmd('!add Blinding Lights - The Weeknd')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full whitespace-nowrap border border-slate-700">+ Blinding Lights</button>
                     <button onclick="sendQuickCmd('!play')" class="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 rounded-full whitespace-nowrap border border-emerald-500/30">▶ !play</button>
                 </div>
 
@@ -271,25 +272,34 @@
         ];
 
         let isRadioPlaying = false;
+        let antiLinkSim = true;
         let synthLoop = null;
         let synth = null;
 
         function switchTab(tab) {
             ['troubleshoot', 'simulator', 'hosting'].forEach(t => {
-                document.getElementById('view-' + t).classList.add('hidden');
-                const btn = document.getElementById('tab-' + t);
-                btn.classList.remove('bg-emerald-500', 'text-slate-950');
-                btn.classList.add('text-slate-300');
+                const viewEl = document.getElementById('view-' + t);
+                const btnEl = document.getElementById('tab-' + t);
+                if (viewEl) viewEl.classList.add('hidden');
+                if (btnEl) {
+                    btnEl.classList.remove('bg-emerald-500', 'text-slate-950');
+                    btnEl.classList.add('text-slate-300');
+                }
             });
-            document.getElementById('view-' + tab).classList.remove('hidden');
+            const activeView = document.getElementById('view-' + tab);
             const activeBtn = document.getElementById('tab-' + tab);
-            activeBtn.classList.add('bg-emerald-500', 'text-slate-950');
-            activeBtn.classList.remove('text-slate-300');
+            if (activeView) activeView.classList.remove('hidden');
+            if (activeBtn) {
+                activeBtn.classList.add('bg-emerald-500', 'text-slate-950');
+                activeBtn.classList.remove('text-slate-300');
+            }
         }
 
         function renderQueue() {
             const listEl = document.getElementById('queue-list');
             const countEl = document.getElementById('queue-count');
+            if (!listEl || !countEl) return;
+
             countEl.textContent = `${songQueue.length} Song${songQueue.length === 1 ? '' : 's'} Queued`;
 
             if (songQueue.length === 0) {
@@ -313,10 +323,10 @@
                     </div>
                     <div class="flex items-center gap-1.5 shrink-0 ml-2">
                         ${idx > 0 ? `
-                        <button onclick="promoteSong(${idx})" title="Move to #1 (!top ${idx+1})" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs flex items-center justify-center border border-slate-800">
+                        <button onclick="promoteSong(${idx})" title="Move to #1 (!top ${idx + 1})" class="w-7 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs flex items-center justify-center border border-slate-800">
                             <i class="fa-solid fa-arrow-up"></i>
                         </button>` : ''}
-                        <button onclick="removeSong(${idx})" title="Remove (!remove ${idx+1})" class="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs flex items-center justify-center border border-red-500/20">
+                        <button onclick="removeSong(${idx})" title="Remove (!remove ${idx + 1})" class="w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs flex items-center justify-center border border-red-500/20">
                             <i class="fa-solid fa-trash-can"></i>
                         </button>
                     </div>
@@ -326,6 +336,7 @@
 
         function appendChatMessage(sender, text, isUser = false) {
             const box = document.getElementById('chat-box');
+            if (!box) return;
             const msgDiv = document.createElement('div');
             if (isUser) {
                 msgDiv.className = "bg-[#005c4b] text-white p-2.5 px-3.5 rounded-2xl rounded-tr-none max-w-[80%] ml-auto shadow text-xs";
@@ -340,95 +351,134 @@
 
         function processBotCommand(rawText) {
             const text = rawText.trim();
-            appendChatMessage("You (+91 9539601481)", text, true);
+            appendChatMessage("Member (Bound Group)", text, true);
             const lower = text.toLowerCase();
 
             setTimeout(() => {
+                if (/chat\.whatsapp\.com|whatsapp\.com\/channel/i.test(text) && antiLinkSim) {
+                    appendChatMessage("RadioBot (+91 9656977828)", `🗑️ *[Message Deleted Instantly]*\n🚫 *Anti-Link Protection:* WhatsApp group/channel invite links are not allowed in this group!`);
+                    return;
+                }
+                if (/\b(porn|pornhub|xvideos|xnxx|xhamster|redtube|youporn|spankbang|brazzers|onlyfans|nsfw|xxx|nude|nudes|hentai)\b/i.test(text) && antiLinkSim) {
+                    appendChatMessage("RadioBot (+91 9656977828)", `🗑️ *[Message Deleted Instantly]*\n🔞 *Anti-NSFW Guard:* Adult/explicit links and messages are strictly prohibited in this group!`);
+                    return;
+                }
+                if (lower === '!antilink') {
+                    antiLinkSim = !antiLinkSim;
+                    appendChatMessage("RadioBot (+91 9656977828)", `🛡️ *Bound Group Anti-Link & Anti-NSFW Protection:* ${antiLinkSim ? '✅ ENABLED (WhatsApp invite links & NSFW/adult messages will be deleted instantly)' : '⏸️ DISABLED'}`);
+                    return;
+                }
                 if (lower.startsWith('!add ')) {
                     const songTitle = text.substring(5).trim();
-                    if (!songTitle) return;
+                    if (!songTitle) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Please provide a song name or .mp3 URL, e.g. `!add Shape of You`");
+                        return;
+                    }
                     songQueue.push({ id: Date.now(), title: songTitle, addedBy: "You (+91 9539601481)", duration: "3:45" });
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `✅ Added to Group Radio Queue (#${songQueue.length}):\n🎵 *${songTitle}* (High-Quality Stereo)`);
-                } 
+                }
+                else if (lower === '!sync' || lower === '!repo') {
+                    songQueue.push(
+                        { id: Date.now() + 1, title: "Dhamm - Official Music Video (GitHub MP3)", addedBy: "GitHub Sync", duration: "HQ MP3" },
+                        { id: Date.now() + 2, title: "Kizhakku Pookkum Slowed Reverb (GitHub MP3)", addedBy: "GitHub Sync", duration: "HQ MP3" }
+                    );
+                    renderQueue();
+                    appendChatMessage("RadioBot (+91 9656977828)", "✅ *Synced 2 MP3 Song(s) from GitHub Repository!*\nType `!play` to broadcast or `!list` to view.");
+                }
                 else if (lower === '!list' || lower === '!queue') {
                     if (songQueue.length === 0) {
-                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty.");
+                        appendChatMessage("RadioBot (+91 9656977828)", "📭 Your request queue is currently empty. Add songs with `!add [song name]` or `!sync`.");
                     } else {
                         const formatted = songQueue.map((s, i) => `${i + 1}. 🎵 ${s.title}`).join('\n');
-                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}`);
+                        appendChatMessage("RadioBot (+91 9656977828)", `📻 *Current Radio Request Queue:*\n${formatted}\n\n_Reply !remove [number], !top [number], or !skip to control._`);
                     }
                 }
                 else if (lower.startsWith('!remove ')) {
                     const idx = parseInt(text.substring(8).trim(), 10) - 1;
-                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) return;
+                    if (isNaN(idx) || idx < 0 || idx >= songQueue.length) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Invalid song number. Type `!list` to check numbers.");
+                        return;
+                    }
                     const removed = songQueue.splice(idx, 1)[0];
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `🗑️ Removed *${removed.title}* from the request list.`);
                 }
                 else if (lower.startsWith('!top ')) {
                     const idx = parseInt(text.substring(5).trim(), 10) - 1;
-                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) return;
+                    if (isNaN(idx) || idx <= 0 || idx >= songQueue.length) {
+                        appendChatMessage("RadioBot (+91 9656977828)", "⚠️ Provide a valid song number (2 or higher) to move to #1.");
+                        return;
+                    }
                     const item = songQueue.splice(idx, 1)[0];
                     songQueue.unshift(item);
                     renderQueue();
                     appendChatMessage("RadioBot (+91 9656977828)", `⬆️ Moved *${item.title}* to #1 in the queue!`);
                 }
                 else if (lower === '!skip' || lower === '!next') {
-                    const currentTitle = document.getElementById('now-playing-title').textContent;
-                    if (songQueue.length === 0) {
-                        document.getElementById('now-playing-title').textContent = "Nothing Playing (Queue Empty)";
-                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ Skipped *${currentTitle}* and deleted the audio message from chat!\n📭 Queue is now empty.`);
-                    } else {
-                        const next = songQueue.shift();
-                        renderQueue();
-                        document.getElementById('now-playing-title').textContent = next.title;
-                        appendChatMessage("RadioBot (+91 9656977828)", `⏭️ *Skipped ${currentTitle}!* (Removed previous audio player from chat)\n🎧 *Now Broadcasting:* 🎵 ${next.title}`);
-                    }
+                    appendChatMessage("RadioBot (+91 9656977828)", "⏭️ *Skipping current track & deleting previous audio player...*");
+                    playNextInQueue();
                 }
                 else if (lower === '!stop') {
-                    const currentTitle = document.getElementById('now-playing-title').textContent;
-                    document.getElementById('now-playing-title').textContent = "Stopped";
-                    appendChatMessage("RadioBot (+91 9656977828)", `⏹️ Stopped *${currentTitle}* and removed the audio player from the group chat.`);
+                    appendChatMessage("RadioBot (+91 9656977828)", "⏹️ *Stopped playback and removed the audio player from chat.*");
                 }
                 else if (lower === '!play' || lower === '!playnext') {
                     playNextInQueue();
                 }
-            }, 250);
+                else {
+                    appendChatMessage("RadioBot (+91 9656977828)", "🤖 Commands available:\n• `!bind` / `!antilink`\n• `!add [Song or .mp3 URL]`\n• `!sync` (Load GitHub MP3s)\n• `!list`\n• `!skip` / `!stop` / `!play`");
+                }
+            }, 200);
         }
 
         function handleChatSubmit(e) {
             e.preventDefault();
             const input = document.getElementById('chat-input');
-            if (!input.value.trim()) return;
+            if (!input || !input.value.trim()) return;
             processBotCommand(input.value);
             input.value = '';
         }
 
-        function sendQuickCmd(cmd) { processBotCommand(cmd); }
+        function sendQuickCmd(cmd) {
+            processBotCommand(cmd);
+        }
 
         function handleDirectAdd(e) {
             e.preventDefault();
             const input = document.getElementById('direct-song-input');
-            if (!input.value.trim()) return;
+            if (!input || !input.value.trim()) return;
             processBotCommand(`!add ${input.value.trim()}`);
             input.value = '';
         }
 
-        function removeSong(idx) { processBotCommand(`!remove ${idx + 1}`); }
-        function promoteSong(idx) { processBotCommand(`!top ${idx + 1}`); }
+        function removeSong(idx) {
+            processBotCommand(`!remove ${idx + 1}`);
+        }
+
+        function promoteSong(idx) {
+            processBotCommand(`!top ${idx + 1}`);
+        }
 
         function updatePingUrl() {
-            const raw = document.getElementById('render-url-input').value.trim().replace(/\/+$/, '');
-            document.getElementById('generated-ping-url').textContent = (raw || 'https://wabot-4nbu.onrender.com') + '/ping';
+            const input = document.getElementById('render-url-input');
+            const out = document.getElementById('generated-ping-url');
+            if (!input || !out) return;
+            const raw = input.value.trim().replace(/\/+$/, '');
+            out.textContent = (raw || 'https://wabot-4nbu.onrender.com') + '/ping';
         }
 
         function playNextInQueue() {
-            if (songQueue.length === 0) return;
+            if (songQueue.length === 0) {
+                appendChatMessage("RadioBot (+91 9656977828)", "📭 Queue is empty! Add songs first using `!add [Song Name]` or `!sync`.");
+                return;
+            }
             const next = songQueue.shift();
             renderQueue();
-            document.getElementById('now-playing-title').textContent = next.title;
-            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Broadcasting to Group in High-Quality Stereo:*\n🎵 ${next.title}`);
+            const titleEl = document.getElementById('now-playing-title');
+            const metaEl = document.getElementById('now-playing-meta');
+            if (titleEl) titleEl.textContent = next.title;
+            if (metaEl) metaEl.textContent = `Broadcasting 320kbps Stereo MP3 to Group • Queued by ${next.addedBy}`;
+            appendChatMessage("RadioBot (+91 9656977828)", `🎧 *Now Broadcasting:*\n🎵 ${next.title}\n🔊 Live Voice-Chat Radio: https://wabot-4nbu.onrender.com/radio`);
         }
 
         async function toggleRadioAudio() {
@@ -439,10 +489,18 @@
             if (!isRadioPlaying) {
                 await Tone.start();
                 if (!synth) {
-                    synth = new Tone.PolySynth(Tone.Synth).toDestination();
+                    synth = new Tone.PolySynth(Tone.Synth, {
+                        oscillator: { type: "triangle" },
+                        envelope: { attack: 0.05, decay: 0.2, sustain: 0.3, release: 0.8 }
+                    }).toDestination();
                     synth.volume.value = -8;
                 }
-                const chords = [["C4", "E4", "G4", "B4"], ["A3", "C4", "E4", "G4"], ["F3", "A3", "C4", "E4"], ["G3", "B3", "D4", "F4"]];
+                const chords = [
+                    ["C4", "E4", "G4", "B4"],
+                    ["A3", "C4", "E4", "G4"],
+                    ["F3", "A3", "C4", "E4"],
+                    ["G3", "B3", "D4", "F4"]
+                ];
                 let step = 0;
                 synthLoop = new Tone.Loop((time) => {
                     synth.triggerAttackRelease(chords[step % chords.length], "2n", time);
@@ -451,21 +509,26 @@
                 Tone.Transport.start();
 
                 isRadioPlaying = true;
-                btnIcon.className = "fa-solid fa-pause";
-                btnText.textContent = "Pause HQ Stream";
-                eq.classList.remove('hidden');
-                eq.classList.add('flex');
+                if (btnIcon) btnIcon.className = "fa-solid fa-pause";
+                if (btnText) btnText.textContent = "Pause HQ Stream";
+                if (eq) {
+                    eq.classList.remove('hidden');
+                    eq.classList.add('flex');
+                }
             } else {
                 if (synthLoop) synthLoop.stop();
                 Tone.Transport.stop();
                 isRadioPlaying = false;
-                btnIcon.className = "fa-solid fa-play";
-                btnText.textContent = "Test HQ Radio Synth Stream";
-                eq.classList.add('hidden');
-                eq.classList.remove('flex');
+                if (btnIcon) btnIcon.className = "fa-solid fa-play";
+                if (btnText) btnText.textContent = "Test HQ Radio Synth Stream";
+                if (eq) {
+                    eq.classList.add('hidden');
+                    eq.classList.remove('flex');
+                }
             }
         }
 
+        // Initialize Queue on Load
         renderQueue();
     </script>
 </body>
