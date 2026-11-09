@@ -46,6 +46,14 @@ const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || 'https://wabot-4n
 // Default GitHub Repo for syncing .mp3 files live without redeploying
 const DEFAULT_GITHUB_REPO = process.env.GITHUB_REPO || 'https://github.com/BUSA2023/Wabot';
 
+// HIM Pullanithazham Student Prayer Portal Configuration (Firebase Firestore + 9:00 PM Auto-Reminder)
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'prayers-9';
+const PRAYER_PORTAL_APP_ID = process.env.PRAYER_PORTAL_APP_ID || 'default-app-id';
+const PRAYER_PORTAL_DOMAIN = process.env.PRAYER_PORTAL_DOMAIN || 'https://swalath.madrasaa.online';
+const BOT_API_SECRET = process.env.BOT_API_SECRET || ''; // Optional token check
+let lastAuto9PmReminderDate = '';
+let isRunning9PmCheck = false;
+
 // Optional Permanent Session Backup String from Render Environment Variable (SESSION_DATA)
 const ENV_SESSION_DATA = process.env.SESSION_DATA || '';
 
@@ -172,6 +180,66 @@ function getSessionBackupString() {
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Enable CORS so HIM Pullanithazham Prayer Portal (swalath.madrasaa.online) can call this bot directly
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+    next();
+});
+
+// Direct WhatsApp Message Webhook for HIM Pullanithazham Student Prayer Portal
+app.post('/send-reminder', async (req, res) => {
+    try {
+        if (!activeSock || !isConnected) {
+            return res.status(503).json({ ok: false, error: 'WhatsApp Bot is not connected yet' });
+        }
+
+        if (BOT_API_SECRET) {
+            const authHeader = req.headers.authorization || '';
+            const token = authHeader.replace(/^Bearer\s+/i, '').trim() || req.body.token || '';
+            if (token !== BOT_API_SECRET) {
+                return res.status(401).json({ ok: false, error: 'Invalid Bot API token' });
+            }
+        }
+
+        const rawPhone = String(req.body.phone || req.body.to || req.body.chatId || '').replace(/[^0-9]/g, '');
+        const messageText = String(req.body.message || req.body.body || req.body.text || '').trim();
+
+        if (!rawPhone || rawPhone.length < 10 || !messageText) {
+            return res.status(400).json({ ok: false, error: 'Missing valid phone number or message text' });
+        }
+
+        const formattedPhone = rawPhone.length === 10 ? '91' + rawPhone : rawPhone;
+        const targetJid = `${formattedPhone}@s.whatsapp.net`;
+
+        await activeSock.sendMessage(targetJid, { text: messageText });
+        console.log(`✅ [Prayer Portal Bot] Sent reminder to +${formattedPhone} (${req.body.studentName || 'Student'})`);
+
+        return res.status(200).json({
+            ok: true,
+            idMessage: 'WA_BOT_' + Date.now(),
+            to: formattedPhone
+        });
+    } catch (err) {
+        console.error('❌ [Prayer Portal Bot] Send error:', err.message);
+        return res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+// Manual endpoint to trigger the 24/7 Server-Side 9:00 PM Firestore Prayer Check
+app.post('/run-9pm-check', async (req, res) => {
+    try {
+        const summary = await checkAndSend9PmPrayerReminders(true);
+        res.status(200).json({ ok: true, ...summary });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
 
 // Live JSON status endpoint for auto-updating frontend
 app.get('/status', (req, res) => {
@@ -780,6 +848,179 @@ function fetchGitHubRepoMp3s(repoUrl) {
 }
 
 // ============================================================================
+// 1B. 24/7 SERVER-SIDE 9:00 PM IST FIRESTORE PRAYER REMINDER ENGINE
+// Automatically checks Firebase (prayers-9) & sends WhatsApp to unmarked students
+// ============================================================================
+function fetchJsonUrl(url, options = {}) {
+    return new Promise((resolve, reject) => {
+        const req = https.request(url, options, (res) => {
+            let raw = '';
+            res.on('data', chunk => raw += chunk);
+            res.on('end', () => {
+                try {
+                    resolve({ statusCode: res.statusCode, data: raw ? JSON.parse(raw) : {} });
+                } catch (e) {
+                    resolve({ statusCode: res.statusCode, data: {} });
+                }
+            });
+        });
+        req.on('error', reject);
+        if (options.body) req.write(options.body);
+        req.end();
+    });
+}
+
+function getKeralaISTNow() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    }).formatToParts(new Date());
+    const map = {};
+    for (const p of parts) map[p.type] = p.value;
+    let hour = parseInt(map.hour, 10);
+    if (hour === 24) hour = 0;
+    const minute = parseInt(map.minute, 10);
+    const dateStr = `${map.year}-${map.month}-${map.day}`;
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const hr12 = hour % 12 === 0 ? 12 : hour % 12;
+    const timeLabel = `${hr12}:${String(minute).padStart(2, '0')} ${period}`;
+    return { dateStr, hour, minute, timeLabel };
+}
+
+async function checkAndSend9PmPrayerReminders(forceManual = false) {
+    if (!activeSock || !isConnected) {
+        return { sentCount: 0, pendingCount: 0, note: 'Bot not connected to WhatsApp' };
+    }
+    if (isRunning9PmCheck) {
+        return { sentCount: 0, pendingCount: 0, note: '9:00 PM check already in progress' };
+    }
+
+    isRunning9PmCheck = true;
+    let sentCount = 0;
+    let pendingCount = 0;
+
+    try {
+        const ist = getKeralaISTNow();
+        const baseUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/artifacts/${PRAYER_PORTAL_APP_ID}/public/data`;
+
+        const classesRes = await fetchJsonUrl(`${baseUrl}/classes`);
+        const classDocs = classesRes.data?.documents || [];
+
+        for (const clsDoc of classDocs) {
+            const classId = clsDoc.name.split('/').pop();
+            const className = clsDoc.fields?.name?.stringValue || classId;
+            const studentsArr = clsDoc.fields?.students?.arrayValue?.values || [];
+            if (studentsArr.length === 0) continue;
+
+            const recUrl = `${baseUrl}/class_records_${classId}/${ist.dateStr}`;
+            const recRes = await fetchJsonUrl(recUrl);
+            const recFields = recRes.statusCode === 200 ? (recRes.data?.fields || {}) : {};
+
+            for (let idx = 0; idx < studentsArr.length; idx++) {
+                const stFields = studentsArr[idx]?.mapValue?.fields || {};
+                const stName = stFields.name?.stringValue || '';
+                if (!stName) continue;
+
+                const numMatch = className.match(/\d+/);
+                const prefix = numMatch ? numMatch[0] : 'S';
+                const stId = (stFields.studentId?.stringValue || `HIM-${prefix}${String(idx + 1).padStart(2, '0')}`).toUpperCase();
+                const phone1 = (stFields.phone1?.stringValue || '').trim();
+                const phone2 = (stFields.phone2?.stringValue || '').trim();
+
+                const stRec = recFields[stName]?.mapValue?.fields || {};
+                const alreadyReminded = Boolean(stRec.remindedAt9PM?.stringValue);
+                if (!forceManual && alreadyReminded) continue;
+
+                const fullExcused = stRec.excused?.booleanValue === true;
+                const openedToday = Boolean(stRec.openedAt?.stringValue);
+                const prayers = ['Subh', 'Luhr', 'Asr', 'Magrib', 'Isha'];
+                const missing = [];
+                let doneCount = 0;
+
+                for (const p of prayers) {
+                    const pVal = stRec[p];
+                    const isDone = fullExcused || (pVal && (pVal.booleanValue === true || pVal.stringValue === 'excused'));
+                    if (isDone) doneCount++;
+                    else missing.push(p);
+                }
+
+                if (doneCount < 5) {
+                    pendingCount++;
+                    const validPhones = [phone1, phone2]
+                        .map(p => p.replace(/[^0-9]/g, ''))
+                        .filter(p => p.length >= 10);
+
+                    if (validPhones.length === 0) continue;
+
+                    const sheetUrl = `${PRAYER_PORTAL_DOMAIN}/?class=${encodeURIComponent(className)}&id=${encodeURIComponent(stId)}&name=${encodeURIComponent(stName)}&sheet=only`;
+                    const statusLine = (!openedToday && doneCount === 0)
+                        ? `No prayer entry has been marked on your sheet today (*0/5 prayers ticked*).`
+                        : `You have only marked *${doneCount}/5 prayers* today (Pending: *${missing.join(', ')}*).`;
+
+                    const msgText = `*HIM PULLANITHAZHAM (${className}) - 9:00 PM Prayer Reminder* 🌙\nAssalamu Alaikum *${stName}* (ID: *${stId}*),\n\n${statusLine}\n\nPlease tap your personal Prayer Sheet link below and mark your daily prayers before sleeping:\n${sheetUrl}`;
+
+                    let deliveredAny = false;
+                    for (const rawP of validPhones) {
+                        const cleanP = rawP.length === 10 ? '91' + rawP : rawP;
+                        try {
+                            await activeSock.sendMessage(`${cleanP}@s.whatsapp.net`, { text: msgText });
+                            deliveredAny = true;
+                            await delay(1200);
+                        } catch (sendErr) {
+                            console.error(`Failed sending 9PM reminder to ${stName} (${cleanP}):`, sendErr.message);
+                        }
+                    }
+
+                    if (deliveredAny) {
+                        sentCount++;
+                        // Update remindedAt9PM in Firestore so student is marked as reminded
+                        try {
+                            const updatedStFields = {
+                                ...stRec,
+                                remindedAt9PM: { stringValue: `Bot ${ist.timeLabel}` }
+                            };
+                            const patchUrl = `${recUrl}?updateMask.fieldPaths=${encodeURIComponent('`' + stName + '`')}`;
+                            await fetchJsonUrl(patchUrl, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    fields: {
+                                        [stName]: { mapValue: { fields: updatedStFields } }
+                                    }
+                                })
+                            });
+                        } catch (patchErr) {}
+                    }
+                }
+            }
+        }
+
+        console.log(`🌙 [9:00 PM Prayer Bot] Checked Firestore (${ist.dateStr}): ${pendingCount} pending, ${sentCount} reminded via WhatsApp.`);
+    } catch (err) {
+        console.error('⚠️ [9:00 PM Prayer Bot] Error checking Firestore:', err.message);
+    } finally {
+        isRunning9PmCheck = false;
+    }
+
+    return { sentCount, pendingCount };
+}
+
+// Check every 60 seconds if it is 9:00 PM IST (hour === 21) to auto-dispatch reminders 24/7
+setInterval(() => {
+    const ist = getKeralaISTNow();
+    if (ist.hour === 21 && lastAuto9PmReminderDate !== ist.dateStr && isConnected) {
+        lastAuto9PmReminderDate = ist.dateStr;
+        console.log(`⏰ 9:00 PM IST reached (${ist.dateStr})! Running automatic HIM Pullanithazham student prayer reminder check...`);
+        checkAndSend9PmPrayerReminders(false);
+    }
+}, 60 * 1000);
+
+// ============================================================================
 // 2. WHATSAPP BOT CORE LOGIC (LOCKED SOCKET INSTANCE & ANTI-DROP HEARTBEAT)
 // ============================================================================
 const logger = pino({ level: 'silent' });
@@ -1277,10 +1518,25 @@ async function startRadioBot(forceRestart = false) {
                                   `*Commands (both . and ! work):*\n` +
                                   `• \`.bind\` (Send inside Group to bind Radio & Anti-Link)\n` +
                                   `• \`.antilink\` (Toggle auto-delete WhatsApp/NSFW links)\n` +
+                                  `• \`.remind\` (Send 9:00 PM Prayer Reminders to unmarked students now)\n` +
                                   `• \`.sync\` (Syncs .mp3s from GitHub repo)\n` +
                                   `• \`.add <song or .mp3 url>\`\n` +
                                   `• \`.play\` / \`.skip\` / \`.stop\`\n` +
                                   `• \`.list\` / \`.top <num>\` / \`.remove <num>\``
+                        }, { quoted: msg });
+                        continue;
+                    }
+
+                    if (cmd === '!remind' || cmd === '!9pm' || cmd === '!reminders') {
+                        await sock.sendMessage(remoteJid, {
+                            text: `🌙 *Checking HIM Pullanithazham Student Prayer Portal (${FIREBASE_PROJECT_ID})* for students who haven't marked all 5 prayers today...`
+                        }, { quoted: msg });
+                        const result = await checkAndSend9PmPrayerReminders(true);
+                        await sock.sendMessage(remoteJid, {
+                            text: `✅ *9:00 PM Prayer Reminder Run Complete!*\n\n` +
+                                  `📋 *Students with Incomplete/No Entry:* ${result.pendingCount}\n` +
+                                  `📲 *WhatsApp Reminders Sent:* ${result.sentCount}\n\n` +
+                                  `_(Note: Only students with Phone 1 or Phone 2 saved in the portal receive WhatsApp messages.)_`
                         }, { quoted: msg });
                         continue;
                     }
